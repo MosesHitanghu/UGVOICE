@@ -1,0 +1,53 @@
+<svg width="512" height="384" viewBox="0 0 512 384" xmlns="http://www.w3.org/2000/svg">
+  <title>Public Feedback Analysis Logo</title>
+  <desc>Speech bubble with people and magnifying glass chart in black, yellow, red and white.</desc>
+  <rect width="512" height="384" fill="none"/>
+
+  <!-- Speech bubble -->
+  <path d="M260 53
+           C157 53 73 130 73 224
+           C73 255 81 284 97 309
+           L82 362
+           L137 333
+           C172 352 214 362 260 362
+           C296 362 330 355 360 342"
+        fill="#ffffff"
+        stroke="#111111"
+        stroke-width="24"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <path d="M260 53
+           C343 53 411 104 434 175"
+        fill="none"
+        stroke="#111111"
+        stroke-width="24"
+        stroke-linecap="round"/>
+
+  <!-- People -->
+  <g>
+    <circle cx="166" cy="168" r="27" fill="#ffc20a"/>
+    <path d="M129 250 C130 211 146 196 166 196 C186 196 202 211 203 250 Z" fill="#ffc20a"/>
+
+    <circle cx="250" cy="143" r="36" fill="#111111"/>
+    <path d="M197 277 C199 221 219 192 250 192 C281 192 301 221 303 277 Z" fill="#111111"/>
+
+    <circle cx="337" cy="168" r="27" fill="#ff1f1f"/>
+    <path d="M300 250 C301 211 317 196 337 196 C357 196 373 211 374 250 Z" fill="#ff1f1f"/>
+  </g>
+
+  <!-- Feedback dots -->
+  <circle cx="224" cy="301" r="10" fill="#111111"/>
+  <circle cx="260" cy="301" r="10" fill="#111111"/>
+  <circle cx="296" cy="301" r="10" fill="#111111"/>
+
+  <!-- Magnifying glass -->
+  <g>
+    <circle cx="377" cy="264" r="74" fill="#ffffff" stroke="#111111" stroke-width="22"/>
+    <line x1="429" y1="316" x2="480" y2="367" stroke="#111111" stroke-width="28" stroke-linecap="round"/>
+  </g>
+
+  <!-- Chart inside magnifier -->
+  <rect x="334" y="276" width="24" height="52" rx="4" fill="#ffc20a"/>
+  <rect x="372" y="247" width="24" height="81" rx="4" fill="#ffc20a"/>
+  <rect x="410" y="210" width="24" height="118" rx="4" fill="#ff1f1f"/>
+</svg>

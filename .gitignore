@@ -1,0 +1,32 @@
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+myvenv/
+.virtualenv-app-data/
+.codex-temp/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+.vite/
+
+# Logs and OS/editor noise
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Runtime uploads and generated ML artifacts
+backend/uploads/
+backend/models/
+backend/*.joblib

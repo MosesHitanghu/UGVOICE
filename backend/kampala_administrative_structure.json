@@ -1,0 +1,84 @@
+{
+    "region": "Central",
+    "district": "Kampala",
+    "divisions": [
+        {
+            "name": "Central Division",
+            "constituency": "Kampala Central",
+            "parishes": [
+                "Kololo",
+                "Nakasero",
+                "Old Kampala",
+                "Kamwokya",
+                "Mengo",
+                "Civic Centre"
+            ]
+        },
+        {
+            "name": "Makindye Division",
+            "constituencies": [
+                "Makindye East",
+                "Makindye West"
+            ],
+            "parishes": [
+                "Kansanga",
+                "Kibuli",
+                "Lukuli",
+                "Ggaba",
+                "Salaama",
+                "Nsambya"
+            ]
+        },
+        {
+            "name": "Nakawa Division",
+            "constituencies": [
+                "Nakawa East",
+                "Nakawa West"
+            ],
+            "parishes": [
+                "Naguru",
+                "Ntinda",
+                "Kiwatule",
+                "Banda",
+                "Butabika",
+                "Mbuya"
+            ]
+        },
+        {
+            "name": "Rubaga Division",
+            "constituencies": [
+                "Rubaga North",
+                "Rubaga South"
+            ],
+            "parishes": [
+                "Busega",
+                "Kabowa",
+                "Kasubi",
+                "Lubya",
+                "Lungujja",
+                "Mutundwe",
+                "Najjanankumbi I",
+                "Najjanankumbi II",
+                "Nakulabye",
+                "Namirembe",
+                "Nateete",
+                "Rubaga"
+            ]
+        },
+        {
+            "name": "Kawempe Division",
+            "constituencies": [
+                "Kawempe North",
+                "Kawempe South"
+            ],
+            "parishes": [
+                "Bwaise",
+                "Kazo",
+                "Makerere",
+                "Mulago",
+                "Kawempe",
+                "Kyebando"
+            ]
+        }
+    ]
+}
