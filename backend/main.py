@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 import json
+import logging
 from pathlib import Path
 import random
 from typing import Optional, Type
@@ -24,6 +25,7 @@ from nlp_pipeline import (
 )
 import hf_inference_service as hf_inference
 from database import (
+    database_configuration_summary,
     drop_obsolete_messaging_tables,
     get_db,
     initialize_database,
@@ -42,6 +44,7 @@ from storage import (
 )
 load_dotenv()
 HF_TOKEN = os.getenv("HF_UGVOICE_TOKEN") or os.getenv("HF_TOKEN")
+logger = logging.getLogger("ugvoice")
 
 if not HF_TOKEN:
     print("HF_TOKEN not found")
@@ -2964,8 +2967,25 @@ def health_check():
 
 @app.get("/health/ready", include_in_schema=False)
 def readiness_check(db: Session = Depends(get_db)):
-    db.execute(text("SELECT 1"))
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        configuration = database_configuration_summary()
+        logger.exception("Database readiness check failed: %s", configuration)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Database connection failed",
+                "error_type": type(exc).__name__,
+                "configuration": configuration,
+            },
+        ) from exc
     return {"status": "ready", "database": "connected"}
+
+
+@app.get("/health/database-config", include_in_schema=False)
+def database_configuration_check():
+    return database_configuration_summary()
 
 
 @app.get("/ml/status", include_in_schema=False)
@@ -4815,24 +4835,38 @@ def initialize_db_with_seed_data(
         update_legacy_bulk_posts,
     )
 
-    initialize_database(include_reference_data=True)
-    db = SessionLocal()
+    stage = "database initialization"
+    db = None
     try:
+        initialize_database(include_reference_data=True)
+        db = SessionLocal()
+        stage = "authorization"
         authorize_database_admin_action(
             db,
             actor_user_id=actor_user_id,
             setup_token=setup_token,
         )
+        stage = "label existing seed data"
         label_existing_seed_data(db)
+        stage = "seed users"
         users = seed_users(db)
+        stage = "create primary administrator"
         ensure_primary_admin(db, get_uganda_location_paths(db))
+        stage = "seed topics and reviews"
         seed_topics_and_reviews(db, users)
+        stage = "seed feedbacks"
         seed_feedbacks(db, users)
+        stage = "seed analytics data"
         seed_skylab_analytics_data(db, users)
+        stage = "update legacy posts"
         update_legacy_bulk_posts(db)
+        stage = "seed posts, reviews, and reactions"
         seed_posts_reviews_and_reactions(db, users)
+        stage = "seed subscriptions"
         seed_subscriptions(db, users)
+        stage = "seed emerging issues"
         seed_emerging_issues(db, users)
+        stage = "commit seed data"
         db.commit()
         return {
             "message": "Database initialized with seed data",
@@ -4845,11 +4879,25 @@ def initialize_db_with_seed_data(
                 "emerging_issues": db.query(db_models.EmergingIssue).filter(db_models.EmergingIssue.seed_tag == DEMO_SEED_TAG).count(),
             },
         }
-    except Exception:
-        db.rollback()
+    except HTTPException:
+        if db is not None:
+            db.rollback()
         raise
+    except Exception as exc:
+        if db is not None:
+            db.rollback()
+        logger.exception("Seed initialization failed during stage: %s", stage)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Database seed initialization failed",
+                "stage": stage,
+                "error_type": type(exc).__name__,
+            },
+        ) from exc
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 @app.post("/admin/initialize-db")

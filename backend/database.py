@@ -83,32 +83,55 @@ def build_database_url_from_components(prefix: str) -> str | None:
     )
 
 
-def get_database_url() -> str | None:
+def get_database_url_and_source() -> tuple[str | None, str | None]:
     for env_name in DATABASE_URL_ENV_NAMES:
         value = os.getenv(env_name)
         if not value:
             continue
         database_url = normalize_database_url(value)
         if is_valid_database_url(database_url):
-            return database_url
+            return database_url, env_name
 
     for prefix in DATABASE_COMPONENT_PREFIXES:
         database_url = build_database_url_from_components(prefix)
         if database_url and is_valid_database_url(database_url):
-            return database_url
+            return database_url, f"{prefix}_* components"
 
-    return None
+    return None, None
+
+
+def get_database_url() -> str | None:
+    database_url, _ = get_database_url_and_source()
+    return database_url
 
 
 LOCAL_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-CONFIGURED_DATABASE_URL = get_database_url()
+CONFIGURED_DATABASE_URL, DATABASE_URL_SOURCE = get_database_url_and_source()
 SQLALCHEMY_DATABASE_URL = CONFIGURED_DATABASE_URL or LOCAL_DATABASE_URL
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     pool_pre_ping=True,
     poolclass=NullPool,
+    connect_args={
+        "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "10")),
+    },
 )
+
+
+def database_configuration_summary() -> dict:
+    url = make_url(SQLALCHEMY_DATABASE_URL)
+    return {
+        "configured": CONFIGURED_DATABASE_URL is not None,
+        "source": DATABASE_URL_SOURCE or "local fallback",
+        "driver": url.drivername,
+        "host": url.host,
+        "port": url.port,
+        "database": url.database,
+        "sslmode": url.query.get("sslmode"),
+    }
+
+
 COUNTRIES_SOURCE_PATH = files("tzdata.zoneinfo").joinpath("iso3166.tab")
 UGANDA_HIERARCHY_PATH = BACKEND_DIR / "uganda_administrative_hierarchy.json"
 KAMPALA_HIERARCHY_PATH = BACKEND_DIR / "kampala_administrative_structure.json"
