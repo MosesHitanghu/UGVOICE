@@ -113,14 +113,17 @@ def get_db_setup_token():
     return None
 
 
-configured_origins = [
+PRODUCTION_FRONTEND_ORIGINS = {
+    "https://ugvoicefrontend.vercel.app",
+}
+configured_origins = sorted(PRODUCTION_FRONTEND_ORIGINS | {
     origin.strip()
     for origin in os.getenv(
         "CORS_ALLOWED_ORIGINS",
         "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174",
     ).split(",")
     if origin.strip()
-]
+})
 app.add_middleware(
     CORSMiddleware,
     allow_origins=configured_origins,

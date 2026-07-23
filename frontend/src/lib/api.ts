@@ -3,7 +3,9 @@ import axios from "axios";
 export const API_BASE_URL =
   (
     import.meta.env.VITE_API_BASE_URL ||
-    (import.meta.env.PROD ? "/api" : "http://127.0.0.1:9000")
+    (import.meta.env.PROD
+      ? "https://ugvoicebackend.vercel.app"
+      : "http://127.0.0.1:9000")
   ).replace(/\/$/, "");
 
 export const api = axios.create({
