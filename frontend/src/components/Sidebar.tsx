@@ -17,6 +17,7 @@ import { createTheme, ThemeProvider } from "@mui/material/styles";
 import { useMemo, useState, useEffect } from "react";
 import { DarkMode, LightMode } from "@mui/icons-material";
 const drawerWidth = 240;
+const APP_FONT_FAMILY = '"Google Sans", "Segoe UI", sans-serif';
 
 interface AppBarProps extends MuiAppBarProps {
   open?: boolean;
@@ -65,6 +66,9 @@ export default function Sidebar() {
       createTheme({
         palette: {
           mode: mode === "dark" ? "dark" : "light",
+        },
+        typography: {
+          fontFamily: APP_FONT_FAMILY,
         },
       }),
     [mode],

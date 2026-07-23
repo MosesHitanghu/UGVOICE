@@ -1,4 +1,5 @@
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Date,
@@ -45,6 +46,7 @@ class User(Base):
     type_of_business = Column(String, nullable=True)
     profile_picture = Column(String, nullable=True)
     description = Column(Text, nullable=True)
+    theme_colors = Column(Text, nullable=True)
     seed_tag = Column(String, nullable=True, index=True)
 
 
@@ -57,7 +59,7 @@ class Topics(Base):
     date_added = Column(Date)
     time_added = Column(Time)
     seed_tag = Column(String, nullable=True, index=True)
-    
+
 
 
 class Review(Base):
@@ -106,6 +108,11 @@ class Feedback(Base):
     embedding_model = Column(String, nullable=True)
     summar_model = Column(String, nullable=True)
     sentiment_model = Column(String, nullable=True)
+    inference_provider = Column(String, nullable=True)
+    inference_mode = Column(String, nullable=True)
+    inference_fallback_used = Column(Boolean, nullable=True)
+    inference_fallback_tasks = Column(Text, nullable=True)
+    inference_latency_ms = Column(Integer, nullable=True)
     topic_id = Column(Integer, nullable=True)
     issue_id = Column(Integer, ForeignKey("issues.id"), nullable=True)
     topic_probability = Column(Float, nullable=True)

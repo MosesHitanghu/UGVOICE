@@ -22,7 +22,8 @@ import {
   type CustomThemeColors,
   type UgandaFlagColors,
 } from "../../lib/ugandaTheme";
-import { getStoredUser } from "../../lib/session";
+import { api } from "../../lib/api";
+import { getStoredUser, storeUser } from "../../lib/session";
 
 type EditableColorKey = "colorOne" | "colorTwo" | "colorThree";
 type EditableFlagColorKey = "black" | "yellow" | "red";
@@ -43,23 +44,41 @@ const normalizeAccessValue = (value?: string | null) => value?.trim().toLowerCas
 
 const SettingsPage = () => {
   const currentUser = getStoredUser();
+  const currentUserId = currentUser?.id;
   const isAdmin = normalizeAccessValue(currentUser?.role) === "admin";
   const [themeColors, setThemeColors] = useState<CustomThemeColors>(
-    getStoredCustomThemeColors(),
+    getStoredCustomThemeColors(currentUserId, currentUser?.theme_colors),
   );
   const [flagColors, setFlagColors] = useState<UgandaFlagColors>(
     getStoredUgandaFlagColors(),
   );
 
+  const persistThemeColors = async (nextColors: CustomThemeColors) => {
+    if (!currentUserId) {
+      return;
+    }
+
+    try {
+      const response = await api.put(`/users/${currentUserId}`, {
+        theme_colors: JSON.stringify(nextColors),
+      });
+      storeUser(response.data);
+    } catch {
+      // Keep the local profile-scoped preference even if the network save fails.
+    }
+  };
+
   const updateThemeColor = (key: EditableColorKey, value: string) => {
     const nextColors = { ...themeColors, [key]: value.toUpperCase(), white: "#FFFFFF" as const };
     setThemeColors(nextColors);
-    storeCustomThemeColors(nextColors);
+    storeCustomThemeColors(nextColors, currentUserId);
+    void persistThemeColors(nextColors);
   };
 
   const resetThemeColors = () => {
     setThemeColors(DEFAULT_CUSTOM_THEME_COLORS);
-    storeCustomThemeColors(DEFAULT_CUSTOM_THEME_COLORS);
+    storeCustomThemeColors(DEFAULT_CUSTOM_THEME_COLORS, currentUserId);
+    void persistThemeColors(DEFAULT_CUSTOM_THEME_COLORS);
   };
 
   const updateFlagColor = (key: EditableFlagColorKey, value: string) => {

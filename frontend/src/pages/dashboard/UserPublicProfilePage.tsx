@@ -11,7 +11,9 @@ import {
   Chip,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Divider,
   Drawer,
@@ -22,9 +24,9 @@ import {
   Paper,
   Stack,
   TextField,
+  Tooltip,
   ToggleButton,
   ToggleButtonGroup,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { alpha, useTheme } from "@mui/material/styles";
@@ -50,6 +52,9 @@ import VisibilityIcon from "@mui/icons-material/Visibility";
 
 import { api } from "../../lib/api";
 import CenteredLoader from "../../components/CenteredLoader";
+import ExperimentalFeedbackFields, {
+  INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+} from "../../components/ExperimentalFeedbackFields";
 import PostThumbnail from "../../components/PostThumbnail";
 import PostCategoryAutocomplete from "../../components/PostCategoryAutocomplete";
 import PostReviewDialog from "../../components/PostReviewDialog";
@@ -206,7 +211,6 @@ const USER_ROLE_ACTIONS: Array<{
   { action: "label_parliament", label: "Label as Parliament", role: "Parliament" },
   { action: "label_constituency", label: "Label as Constituency", role: "Constituency" },
 ];
-
 const getProfileDisplayName = (user: PublicUser) => {
   const normalizedType = (user.type || "personal").trim().toLowerCase();
   if (normalizedType !== "personal" && normalizedType !== "individual" && user.company_name) {
@@ -223,10 +227,6 @@ const getProfileTypeLabel = (userType?: string | null) => {
     return "Personal";
   }
 
-  if (normalized === "ngo") {
-    return "NGO";
-  }
-
   return normalized
     .split(" ")
     .filter(Boolean)
@@ -241,10 +241,7 @@ const canUseRoleActionForUser = (user: PublicUser, action: UserRoleAction) => {
   if (action === "label_mp") {
     return accountType === "personal" || accountType === "individual";
   }
-  if (action === "label_parliament" || action === "label_constituency") {
-    return accountType === "government organization";
-  }
-  return false;
+  return accountType === "government organization";
 };
 
 const getPostAuthorLabel = (
@@ -293,6 +290,7 @@ const UserPublicProfilePage = () => {
     title: "",
     category: "",
     description: "",
+    ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
   });
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackSuccess, setFeedbackSuccess] = useState("");
@@ -301,6 +299,7 @@ const UserPublicProfilePage = () => {
   const [profileActionMenuAnchorEl, setProfileActionMenuAnchorEl] =
     useState<HTMLElement | null>(null);
   const [profileActionLoading, setProfileActionLoading] = useState(false);
+  const [deleteUserDialogOpen, setDeleteUserDialogOpen] = useState(false);
   const [switchMenuAnchorEl, setSwitchMenuAnchorEl] = useState<HTMLElement | null>(null);
   const [switchingAccount, setSwitchingAccount] = useState(false);
   const [parentSwitchDrawerOpen, setParentSwitchDrawerOpen] = useState(false);
@@ -357,20 +356,12 @@ const UserPublicProfilePage = () => {
   const canGiveFeedback = Boolean(currentUserId && user && currentUserId !== user.id);
   const canSwitchAccounts = isOwnProfile && (childAccounts.length > 0 || Boolean(parentAccount));
 
-  const canManageProfile = (profileUser: PublicUser) => {
-    if (isOwnProfile) {
-      return false;
-    }
-    if (currentUserRole === "admin") {
-      return true;
-    }
-
-    return (
-      currentUserRole === "parliament" &&
-      currentUserCountry.length > 0 &&
-      currentUserCountry === normalizeAccessValue(profileUser.company_country)
-    );
-  };
+  const canManageProfile = (profileUser: PublicUser) =>
+    !isOwnProfile &&
+    (currentUserRole === "admin" ||
+      (currentUserRole === "parliament" &&
+        currentUserCountry.length > 0 &&
+        currentUserCountry === normalizeAccessValue(profileUser.company_country)));
 
   const isRoleSelected = (profileUser: PublicUser | null, role: string) =>
     normalizeAccessValue(profileUser?.role) === normalizeAccessValue(role);
@@ -1040,7 +1031,12 @@ const UserPublicProfilePage = () => {
         category: feedbackDraft.category.trim() || null,
         description: feedbackDraft.description.trim(),
       });
-      setFeedbackDraft({ title: "", category: "", description: "" });
+      setFeedbackDraft({
+        title: "",
+        category: "",
+        description: "",
+        ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+      });
       setFeedbackDialogOpen(false);
       setFeedbackSuccess(`Your feedback for ${getProfileDisplayName(user)} has been sent.`);
     } catch {
@@ -1051,11 +1047,15 @@ const UserPublicProfilePage = () => {
   };
 
   const openFeedbackDialog = () => {
-    setProfileActionMenuAnchorEl(null);
     setFeedbackSuccess("");
     setFeedbackFormError("");
     setFeedbackSubmitted(false);
-    setFeedbackDraft({ title: "", category: "", description: "" });
+    setFeedbackDraft({
+      title: "",
+      category: "",
+      description: "",
+      ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+    });
     setFeedbackDialogOpen(true);
   };
 
@@ -1071,26 +1071,44 @@ const UserPublicProfilePage = () => {
       const response = await api.post<PublicUser>(
         `/users/${user.id}/moderation-action`,
         { action },
-        {
-          params: {
-            actor_user_id: currentUserId,
-          },
-        },
+        { params: { actor_user_id: currentUserId } },
       );
-      setUser((current) => (current ? { ...current, ...response.data } : response.data));
+      setUser((current) =>
+        current ? { ...current, ...response.data } : response.data,
+      );
       setProfileActionMenuAnchorEl(null);
     } catch (caughtError: unknown) {
-      const message =
-        typeof caughtError === "object" &&
-        caughtError !== null &&
-        "response" in caughtError
-          ? (
-              caughtError as {
-                response?: { data?: { detail?: string } };
-              }
-            ).response?.data?.detail || "Unable to apply that user action."
-          : "Unable to apply that user action.";
-      setError(message);
+      const detail =
+        typeof caughtError === "object" && caughtError !== null && "response" in caughtError
+          ? (caughtError as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setError(detail || "Unable to apply that user action.");
+    } finally {
+      setProfileActionLoading(false);
+    }
+  };
+
+  const deleteProfileUser = async () => {
+    if (!currentUserId || !user || currentUserRole !== "admin" || isOwnProfile) {
+      return;
+    }
+
+    setProfileActionLoading(true);
+    try {
+      setError("");
+      await api.delete(`/users/${user.id}`, {
+        params: { actor_user_id: currentUserId },
+      });
+      setDeleteUserDialogOpen(false);
+      setProfileActionMenuAnchorEl(null);
+      navigate("/dashboard/directory", { replace: true });
+    } catch (caughtError: unknown) {
+      const detail =
+        typeof caughtError === "object" && caughtError !== null && "response" in caughtError
+          ? (caughtError as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setDeleteUserDialogOpen(false);
+      setError(detail || "Unable to delete this user.");
     } finally {
       setProfileActionLoading(false);
     }
@@ -1144,25 +1162,6 @@ const UserPublicProfilePage = () => {
         bgcolor: active ? paletteColor : alpha(paletteColor, 0.14),
       },
     };
-  };
-
-  const roleToggleSx = {
-    width: "100%",
-    justifyContent: "flex-start",
-    border: 0,
-    borderRadius: "0 !important",
-    px: 2,
-    py: 0.9,
-    textTransform: "none",
-    fontWeight: 500,
-    "&.Mui-selected": {
-      bgcolor: "transparent",
-      color: "primary.main",
-      fontWeight: 700,
-      "&:hover": {
-        bgcolor: "action.hover",
-      },
-    },
   };
 
   const reactionGroupSx = {
@@ -1350,6 +1349,7 @@ const UserPublicProfilePage = () => {
 
   const publicInfo = [
     { label: getProfileTypeLabel(user.type) },
+    user.role && normalizeAccessValue(user.role) !== "standard" ? { label: user.role } : null,
     user.type_of_business ? { label: user.type_of_business } : null,
     user.company_city ? { label: user.company_city } : null,
     user.company_country ? { label: user.company_country } : null,
@@ -1381,13 +1381,13 @@ const UserPublicProfilePage = () => {
           sx={{ p: { xs: 2.5, md: 3 }, height: "100%", ...profileCardHoverSx }}
         >
           <Stack spacing={2.5} sx={{ height: "100%" }}>
-            {canSwitchAccounts || canGiveFeedback || canManageProfile(user) ? (
+            {canSwitchAccounts || canManageProfile(user) ? (
               <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
-                {canGiveFeedback || canManageProfile(user) ? (
-                  <Tooltip title="User actions">
+                {canManageProfile(user) ? (
+                  <Tooltip title="Manage user">
                     <IconButton
                       size="small"
-                      aria-label={`Open actions for ${getProfileDisplayName(user)}`}
+                      aria-label={`Manage ${getProfileDisplayName(user)}`}
                       onClick={(event) => setProfileActionMenuAnchorEl(event.currentTarget)}
                     >
                       <MoreVertRoundedIcon fontSize="small" />
@@ -1395,16 +1395,16 @@ const UserPublicProfilePage = () => {
                   </Tooltip>
                 ) : null}
                 {canSwitchAccounts ? (
-                <Button
-                  variant="contained"
-                  size="small"
-                  startIcon={<SyncAltRoundedIcon />}
-                  onClick={(event) => setSwitchMenuAnchorEl(event.currentTarget)}
-                  disabled={switchingAccount}
-                  sx={{ borderRadius: "999px" }}
-                >
-                  Switch Account
-                </Button>
+                  <Button
+                    variant="contained"
+                    size="small"
+                    startIcon={<SyncAltRoundedIcon />}
+                    onClick={(event) => setSwitchMenuAnchorEl(event.currentTarget)}
+                    disabled={switchingAccount}
+                    sx={{ borderRadius: "999px" }}
+                  >
+                    Switch Account
+                  </Button>
                 ) : null}
               </Box>
             ) : null}
@@ -1441,21 +1441,38 @@ const UserPublicProfilePage = () => {
                     @{user.username}
                   </Typography>
                 </Box>
-                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              </Stack>
+            </Stack>
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ width: "100%", mt: "auto" }}
+            >
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
                   {publicInfo.map((item) => (
                     <Chip
                       key={item.label}
                       label={item.label}
                       size="small"
-                      sx={{
-                        bgcolor: "primary.main",
-                        color: "primary.contrastText",
-                        fontWeight: 700,
-                      }}
+                      color="primary"
+                      variant="outlined"
+                      sx={{ fontWeight: 700 }}
                     />
                   ))}
-                </Stack>
               </Stack>
+              {canGiveFeedback ? (
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<RateReviewRoundedIcon />}
+                  onClick={openFeedbackDialog}
+                  sx={{ ml: "auto", flexShrink: 0, borderRadius: "999px", textTransform: "none" }}
+                >
+                  Give Feedback
+                </Button>
+              ) : null}
             </Stack>
           </Stack>
         </Paper>
@@ -1466,23 +1483,16 @@ const UserPublicProfilePage = () => {
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
       >
-        {canGiveFeedback ? (
-          <MenuItem onClick={openFeedbackDialog}>
-            <RateReviewRoundedIcon fontSize="small" sx={{ mr: 1 }} />
-            Give Feedback
-          </MenuItem>
-        ) : null}
         {canManageProfile(user) ? (
           <MenuItem
             disabled={profileActionLoading}
             onClick={() => void applyUserAction("verify")}
           >
-            Verify
+            Verify account
           </MenuItem>
         ) : null}
-        {canManageProfile(user) ? (
-          <Box sx={{ minWidth: 220 }}>
-            {USER_ROLE_ACTIONS.filter((item) =>
+        {canManageProfile(user)
+          ? USER_ROLE_ACTIONS.filter((item) =>
               canUseRoleActionForUser(user, item.action),
             ).map((item) => (
               <ToggleButton
@@ -1491,7 +1501,21 @@ const UserPublicProfilePage = () => {
                 selected={isRoleSelected(user, item.role)}
                 disabled={profileActionLoading}
                 onClick={() => void applyUserAction(item.action)}
-                sx={roleToggleSx}
+                sx={{
+                  width: "100%",
+                  justifyContent: "flex-start",
+                  border: 0,
+                  borderRadius: "0 !important",
+                  px: 2,
+                  py: 0.9,
+                  textTransform: "none",
+                  fontWeight: 500,
+                  "&.Mui-selected": {
+                    bgcolor: "transparent",
+                    color: "primary.main",
+                    fontWeight: 700,
+                  },
+                }}
               >
                 {isRoleSelected(user, item.role) ? (
                   <CheckRoundedIcon fontSize="small" sx={{ mr: 1 }} />
@@ -1500,10 +1524,61 @@ const UserPublicProfilePage = () => {
                 )}
                 {item.label}
               </ToggleButton>
-            ))}
-          </Box>
+            ))
+          : null}
+        {currentUserRole === "admin" && !isOwnProfile ? (
+          <MenuItem
+            disabled={profileActionLoading}
+            onClick={() => {
+              setProfileActionMenuAnchorEl(null);
+              setDeleteUserDialogOpen(true);
+            }}
+            sx={{ color: "error.main" }}
+          >
+            <DeleteOutlineRoundedIcon fontSize="small" sx={{ mr: 1 }} />
+            Delete user
+          </MenuItem>
         ) : null}
       </Menu>
+      <Dialog
+        open={deleteUserDialogOpen}
+        onClose={() => {
+          if (!profileActionLoading) {
+            setDeleteUserDialogOpen(false);
+          }
+        }}
+        aria-labelledby="delete-profile-user-title"
+        aria-describedby="delete-profile-user-description"
+      >
+        <DialogTitle id="delete-profile-user-title">Delete user?</DialogTitle>
+        <DialogContent>
+          <DialogContentText id="delete-profile-user-description">
+            Delete {getProfileDisplayName(user)}? This permanently removes the account and
+            its related posts, feedback, and activity.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setDeleteUserDialogOpen(false)}
+            disabled={profileActionLoading}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void deleteProfileUser()}
+            color="error"
+            variant="contained"
+            disabled={profileActionLoading}
+            autoFocus
+          >
+            {profileActionLoading ? (
+              <CircularProgress size={20} color="inherit" />
+            ) : (
+              "Delete user"
+            )}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Menu
         anchorEl={switchMenuAnchorEl}
         open={Boolean(switchMenuAnchorEl)}
@@ -1812,7 +1887,7 @@ const UserPublicProfilePage = () => {
       <Dialog
         open={Boolean(activePost)}
         onClose={() => setActivePost(null)}
-        maxWidth="md"
+        maxWidth="sm"
         fullWidth
       >
         <DialogTitle>
@@ -2104,7 +2179,7 @@ const UserPublicProfilePage = () => {
             setEditDialogOpen(false);
           }
         }}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
         <DialogTitle
@@ -2215,7 +2290,7 @@ const UserPublicProfilePage = () => {
             setFeedbackDialogOpen(false);
           }
         }}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
         <DialogTitle>
@@ -2224,50 +2299,67 @@ const UserPublicProfilePage = () => {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {feedbackFormError ? <Alert severity="error">{feedbackFormError}</Alert> : null}
-            <TextField
-              label="Feedback title"
-              value={feedbackDraft.title}
-              onChange={(event) =>
+            <ExperimentalFeedbackFields
+              value={feedbackDraft}
+              onChange={(value) =>
                 setFeedbackDraft((current) => ({
                   ...current,
-                  title: event.target.value,
+                  ...value,
                 }))
               }
-              size="small"
-              error={Boolean(feedbackSubmitted && getFeedbackTitleError())}
-              helperText={feedbackSubmitted ? getFeedbackTitleError() : ""}
-              fullWidth
             />
-            <Autocomplete
-              freeSolo
-              options={FEEDBACK_CATEGORIES}
-              value={feedbackDraft.category || null}
-              inputValue={feedbackDraft.category}
-              onChange={(_, value) =>
-                setFeedbackDraft((current) => ({
-                  ...current,
-                  category: value || "",
-                }))
-              }
-              onInputChange={(_, value) =>
-                setFeedbackDraft((current) => ({
-                  ...current,
-                  category: value,
-                }))
-              }
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Category"
-                  size="small"
-                  error={Boolean(feedbackSubmitted && getFeedbackCategoryError())}
-                  helperText={feedbackSubmitted ? getFeedbackCategoryError() : ""}
-                  fullWidth
-                />
-              )}
-            />
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1.2fr) minmax(0, 1fr)" },
+                gap: 1.5,
+              }}
+            >
+              <TextField
+                label="Feedback title"
+                value={feedbackDraft.title}
+                onChange={(event) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+                size="small"
+                error={Boolean(feedbackSubmitted && getFeedbackTitleError())}
+                helperText={feedbackSubmitted ? getFeedbackTitleError() : ""}
+                fullWidth
+              />
+              <Autocomplete
+                freeSolo
+                options={FEEDBACK_CATEGORIES}
+                value={feedbackDraft.category || null}
+                inputValue={feedbackDraft.category}
+                onChange={(_, value) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    category: value || "",
+                  }))
+                }
+                onInputChange={(_, value) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    category: value,
+                  }))
+                }
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Category"
+                    size="small"
+                    error={Boolean(feedbackSubmitted && getFeedbackCategoryError())}
+                    helperText={feedbackSubmitted ? getFeedbackCategoryError() : ""}
+                    fullWidth
+                  />
+                )}
+              />
+            </Box>
             <TextField
-              label="Your feedback"
+              label="Section B: Your Feedback"
               value={feedbackDraft.description}
               onChange={(event) =>
                 setFeedbackDraft((current) => ({
@@ -2276,7 +2368,8 @@ const UserPublicProfilePage = () => {
                 }))
               }
               multiline
-              minRows={4}
+              minRows={5}
+              placeholder="Please share your feedback, concern, or suggestion about a public service or government policy in your area. MPs may record feedback received from constituents."
               error={Boolean(feedbackSubmitted && getFeedbackDescriptionError())}
               helperText={feedbackSubmitted ? getFeedbackDescriptionError() : ""}
               fullWidth

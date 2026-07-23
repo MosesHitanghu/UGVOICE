@@ -1,7 +1,10 @@
 import axios from "axios";
 
 export const API_BASE_URL =
-  (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:9000").replace(/\/$/, "");
+  (
+    import.meta.env.VITE_API_BASE_URL ||
+    (import.meta.env.PROD ? "/api" : "http://127.0.0.1:9000")
+  ).replace(/\/$/, "");
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -57,6 +60,7 @@ export type ApiUser = {
   type_of_business?: string | null;
   profile_picture?: string | null;
   description?: string | null;
+  theme_colors?: string | null;
 };
 
 export type ApiCountry = {

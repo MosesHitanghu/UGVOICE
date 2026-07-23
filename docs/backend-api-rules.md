@@ -8,6 +8,7 @@ Use [`system-rules.md`](./system-rules.md) for future cross-system updates, and 
 ## Core Naming
 
 - Use `users` instead of `profiles` in backend code, API routes, and database table naming.
+- Private messaging and chat are not supported and must not introduce API routes or database tables.
 - The main user table is `users`.
 - Use `user_id` for foreign keys that point to the `users` table.
 - Do not introduce new `profile_id` columns or `profiles` route names.
@@ -24,7 +25,10 @@ Use [`system-rules.md`](./system-rules.md) for future cross-system updates, and 
 - `verification_status` is optional on users.
 - `status` is optional on users and can be used for states like `active` or `deactivated`.
 - `visibility` can be `public`, `constituency`, or `private`.
-- `type` should support at least `individual`, `business`, `ngo`, and `government organization`.
+- `type` supports `personal` and `government organization` only; legacy `individual` values normalize to `personal`.
+- `business` and `ngo` account types must not be accepted or seeded.
+- Every user must resolve to a complete Uganda district, constituency, subcounty/division, and parish hierarchy.
+- User country is always normalized to `Uganda`; foreign user country values must be rejected.
 - User search and profile visibility are no longer organization-scoped.
 - Never return the stored `password` field in API responses.
 

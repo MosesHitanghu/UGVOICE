@@ -6,9 +6,16 @@ body,
   width: 100%;
   min-height: 100%;
   overflow-x: hidden;
+  font-family: "Google Sans", "Segoe UI", sans-serif;
 }
 
 body {
-  font-family: "Poppins", sans-serif;
   background: #f8fafc;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
 }

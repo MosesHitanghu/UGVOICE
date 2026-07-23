@@ -382,36 +382,68 @@ const FeedPage = () => {
       setPostFormError("");
       setPostFormSuccess("");
       setSubmittingPost(true);
-      const formData = new FormData();
-      formData.append("author_user_id", String(currentUser.id));
-      formData.append("title", newPost.title.trim());
-      formData.append("content", newPost.content);
-      formData.append("category", newPost.category.trim());
-      formData.append("visibility", newPost.visibility);
-      if (newPost.district_id) {
-        formData.append("district_id", String(newPost.district_id));
-      }
-      if (newPost.constituency_id) {
-        formData.append("constituency_id", String(newPost.constituency_id));
-      }
-      if (newPost.subcounty_id) {
-        formData.append("subcounty_id", String(newPost.subcounty_id));
-      }
-      if (newPost.parish_id) {
-        formData.append("parish_id", String(newPost.parish_id));
-      }
-      if (thumbnailFile) {
-        formData.append("thumbnail", thumbnailFile);
-      }
-      if (attachmentFile) {
-        formData.append("attachment", attachmentFile);
-      }
+      const postPayload = {
+        author_user_id: currentUser.id,
+        title: newPost.title.trim(),
+        content: newPost.content,
+        category: newPost.category.trim(),
+        visibility: newPost.visibility,
+        district_id: newPost.district_id,
+        constituency_id: newPost.constituency_id,
+        subcounty_id: newPost.subcounty_id,
+        parish_id: newPost.parish_id,
+        thumbnail: null as string | null,
+        attachment: null as string | null,
+      };
 
-      await api.post("/posts", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      if (import.meta.env.PROD && (thumbnailFile || attachmentFile)) {
+        const uploadDirectly = async (file: File, folder: string) => {
+          const presigned = await api.post<{
+            upload_url: string;
+            public_url: string;
+            headers: Record<string, string>;
+          }>("/storage/presign", {
+            actor_user_id: currentUser.id,
+            filename: file.name,
+            content_type: file.type || "application/octet-stream",
+            file_size: file.size,
+            folder,
+          });
+          const uploadResponse = await fetch(presigned.data.upload_url, {
+            method: "PUT",
+            headers: presigned.data.headers,
+            body: file,
+          });
+          if (!uploadResponse.ok) {
+            throw new Error("Direct file upload failed");
+          }
+          return presigned.data.public_url;
+        };
+
+        const [thumbnailUrl, attachmentUrl] = await Promise.all([
+          thumbnailFile
+            ? uploadDirectly(thumbnailFile, "post-thumbnails")
+            : Promise.resolve(null),
+          attachmentFile
+            ? uploadDirectly(attachmentFile, "post-attachments")
+            : Promise.resolve(null),
+        ]);
+        postPayload.thumbnail = thumbnailUrl;
+        postPayload.attachment = attachmentUrl;
+        await api.post("/posts", postPayload);
+      } else {
+        const formData = new FormData();
+        Object.entries(postPayload).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            formData.append(key, String(value));
+          }
+        });
+        if (thumbnailFile) formData.append("thumbnail", thumbnailFile);
+        if (attachmentFile) formData.append("attachment", attachmentFile);
+        await api.post("/posts", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
       setNewPost({
         title: "",
         content: "",
@@ -1636,7 +1668,6 @@ const FeedPage = () => {
                       sx={{
                         color: "text.secondary",
                         lineHeight: 1.7,
-                        textAlign: "justify",
                         overflowWrap: "anywhere",
                       }}
                     >

@@ -41,10 +41,8 @@ import {
   getStoredUgandaFlagColors,
   type UgandaFlagColors,
 } from "../lib/ugandaTheme";
-import CountryAutocomplete from "../components/CountryAutocomplete";
 import PhoneNumberField from "../components/PhoneNumberField";
 import UgandaLocationFields from "../components/UgandaLocationFields";
-import { rebasePhoneNumberToCountry } from "../lib/countryPhoneMeta";
 const HeroSection = styled(Box)(({ theme }) => ({
   position: "relative",
   overflow: "hidden",
@@ -127,28 +125,22 @@ const metrics = [
 const features = [
   {
     icon: FeedbackRoundedIcon,
-    title: "Gather public feedback on parliamentary matters",
-    iconGradient:
-      "linear-gradient(135deg, #FCDC04 0%, #D90000 55%, #990000 100%)",
-    iconShadow: "rgba(217, 0, 0, 0.24)",
+    title: "Gather public feedback",
+    iconColor: "#D90000",
     description:
       "Collect structured and open citizen responses on bills, motions, committee work, service delivery, and constituency concerns.",
   },
   {
     icon: InsightsRoundedIcon,
-    title: "Turn citizen voices into legislative signals",
-    iconGradient:
-      "linear-gradient(135deg, #FCDC04 0%, #D90000 55%, #111111 100%)",
-    iconShadow: "rgba(252, 220, 4, 0.24)",
+    title: "Turn voices into signals",
+    iconColor: "#111111",
     description:
       "Surface themes, sentiment shifts, and recurring issues so Parliament, MPs, and committees can see what people are asking for.",
   },
   {
     icon: TrendingUpRoundedIcon,
-    title: "Close the loop with public accountability",
-    iconGradient:
-      "linear-gradient(135deg, #FCDC04 0%, #D90000 52%, #D90000 100%)",
-    iconShadow: "rgba(217, 0, 0, 0.24)",
+    title: "Close the accountability loop",
+    iconColor: "#D90000",
     description:
       "Track responses, monitor concerns over time, and show citizens how their feedback informs debate, oversight, and follow-up.",
   },
@@ -157,7 +149,6 @@ const features = [
 const footerLinks = [
   { label: "Home", sectionId: "home" },
   { label: "Platform", sectionId: "platform" },
-  { label: "Request Walkthrough", sectionId: "demo" },
 ];
 
 const HOME_TITLE = "UGVoice | Parliamentary Citizen Feedback Platform";
@@ -239,6 +230,8 @@ type SignupForm = {
   parish_id: number | null;
 };
 
+type SignupAccountTab = "personal" | "organization";
+
 const initialSignupForm: SignupForm = {
   username: "",
   email: "",
@@ -250,12 +243,20 @@ const initialSignupForm: SignupForm = {
   visibility: "public",
   type: "personal",
   company_name: "",
-  company_country: "",
+  company_country: "Uganda",
   district_id: null,
   constituency_id: null,
   subcounty_id: null,
   parish_id: null,
 };
+
+const createInitialSignupForms = (): Record<SignupAccountTab, SignupForm> => ({
+  personal: { ...initialSignupForm },
+  organization: {
+    ...initialSignupForm,
+    type: "government organization",
+  },
+});
 
 const readStoredTimestamp = (key: string) => {
   const raw = localStorage.getItem(key);
@@ -294,10 +295,9 @@ const MenuHome = () => {
   const [loginFailedAttempts, setLoginFailedAttempts] = useState(0);
   const [loginLockedUntil, setLoginLockedUntil] = useState<number | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [signupForm, setSignupForm] = useState<SignupForm>(initialSignupForm);
-  const [signupAccountTab, setSignupAccountTab] = useState<
-    "personal" | "organization"
-  >("personal");
+  const [signupForms, setSignupForms] = useState(createInitialSignupForms);
+  const [signupAccountTab, setSignupAccountTab] =
+    useState<SignupAccountTab>("personal");
   const [signupShowPassword, setSignupShowPassword] = useState(false);
   const [signupError, setSignupError] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
@@ -318,14 +318,6 @@ const MenuHome = () => {
     boolean | null
   >(null);
   const [signupMobileCheckedValue, setSignupMobileCheckedValue] = useState("");
-  const [demoForm, setDemoForm] = useState({
-    fullName: "",
-    workEmail: "",
-    company: "",
-    teamSize: "",
-    message: "",
-  });
-  const [demoSubmitted, setDemoSubmitted] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const now = Date.now();
@@ -340,6 +332,15 @@ const MenuHome = () => {
       )}.`
     : "";
   const isOrganizationSignup = signupAccountTab === "organization";
+  const signupForm = signupForms[signupAccountTab];
+  const updateSignupForm = (
+    updater: (current: SignupForm) => SignupForm,
+  ) => {
+    setSignupForms((current) => ({
+      ...current,
+      [signupAccountTab]: updater(current[signupAccountTab]),
+    }));
+  };
 
   useEffect(() => {
     const handleFlagColorChange = (event: Event) => {
@@ -669,7 +670,7 @@ const MenuHome = () => {
     setSignupOpen(true);
     setSignupAccountTab("personal");
     setSignupShowPassword(false);
-    setSignupForm(initialSignupForm);
+    setSignupForms(createInitialSignupForms());
     setSignupError("");
     setSignupSubmitted(false);
     setSignupUsernameChecking(false);
@@ -704,20 +705,20 @@ const MenuHome = () => {
 
   const handleSignupTabChange = (
     _: React.SyntheticEvent,
-    nextTab: "personal" | "organization",
+    nextTab: SignupAccountTab,
   ) => {
     setSignupAccountTab(nextTab);
     setSignupSubmitted(false);
     setSignupError("");
-    setSignupForm((current) => ({
-      ...current,
-      type:
-        nextTab === "organization"
-          ? current.type === "personal"
-            ? "business"
-            : current.type
-          : "personal",
-    }));
+    setSignupUsernameChecking(false);
+    setSignupUsernameAvailable(null);
+    setSignupUsernameCheckedValue("");
+    setSignupEmailChecking(false);
+    setSignupEmailAvailable(null);
+    setSignupEmailCheckedValue("");
+    setSignupMobileChecking(false);
+    setSignupMobileAvailable(null);
+    setSignupMobileCheckedValue("");
   };
 
   const scrollToSection = (sectionId: string) => {
@@ -732,37 +733,6 @@ const MenuHome = () => {
       ...formData,
       [e.target.name]: e.target.value,
     });
-  };
-
-  const handleDemoChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ) => {
-    setDemoForm((current) => ({
-      ...current,
-      [e.target.name]: e.target.value,
-    }));
-  };
-
-  const handleDemoSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setDemoSubmitted(true);
-    if (
-      getDemoFullNameError() ||
-      getDemoWorkEmailError() ||
-      getDemoCompanyError() ||
-      getDemoTeamSizeError()
-    ) {
-      return;
-    }
-    alert("Walkthrough request received. Our team will reach out shortly.");
-    setDemoForm({
-      fullName: "",
-      workEmail: "",
-      company: "",
-      teamSize: "",
-      message: "",
-    });
-    setDemoSubmitted(false);
   };
 
   const handleSignupClick = () => {
@@ -856,21 +826,9 @@ const MenuHome = () => {
     event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => {
     const { name, value } = event.target;
-    setSignupForm((current) => ({
+    updateSignupForm((current) => ({
       ...current,
       [name]: value,
-    }));
-  };
-
-  const handleSignupCountryChange = (country: string) => {
-    setSignupForm((current) => ({
-      ...current,
-      company_country: country,
-      mobile_number: rebasePhoneNumberToCountry(
-        current.mobile_number,
-        current.company_country,
-        country,
-      ),
     }));
   };
 
@@ -880,7 +838,7 @@ const MenuHome = () => {
     subcounty_id?: number | null;
     parish_id?: number | null;
   }) => {
-    setSignupForm((current) => ({
+    updateSignupForm((current) => ({
       ...current,
       district_id: nextValue.district_id ?? null,
       constituency_id: nextValue.constituency_id ?? null,
@@ -999,6 +957,18 @@ const MenuHome = () => {
     return "";
   };
 
+  const getSignupLocationError = () => {
+    if (
+      !signupForm.district_id ||
+      !signupForm.constituency_id ||
+      !signupForm.subcounty_id ||
+      !signupForm.parish_id
+    ) {
+      return "District, constituency, subcounty or division, and parish are required.";
+    }
+    return "";
+  };
+
   const canEnableSignupSubmit = () => {
     if (!signupForm.username.trim()) {
       return false;
@@ -1013,6 +983,9 @@ const MenuHome = () => {
       return false;
     }
     if (!signupForm.password.trim()) {
+      return false;
+    }
+    if (getSignupLocationError()) {
       return false;
     }
     if (isOrganizationSignup) {
@@ -1040,6 +1013,7 @@ const MenuHome = () => {
       getSignupMobileError() ||
       getSignupCompanyNameError() ||
       getSignupOrganizationTypeError() ||
+      getSignupLocationError() ||
       signupUsernameChecking ||
       signupEmailChecking ||
       signupMobileChecking
@@ -1051,26 +1025,45 @@ const MenuHome = () => {
     setSignupError("");
 
     try {
-      await api.post<{ message: string; user: ApiUser }>("/signup", {
-        ...signupForm,
+      const commonPayload = {
         username: signupForm.username.trim(),
         email: signupForm.email.trim(),
-        mobile_number: signupForm.mobile_number || null,
-        gender: signupForm.gender || null,
-        fname: isOrganizationSignup ? null : signupForm.fname.trim(),
-        lname: isOrganizationSignup ? null : signupForm.lname.trim(),
-        type: isOrganizationSignup ? signupForm.type : "personal",
-        company_name: signupForm.company_name.trim() || null,
-        company_country: signupForm.company_country.trim() || null,
+        password: signupForm.password,
+        mobile_number: signupForm.mobile_number.trim() || null,
+        visibility: signupForm.visibility,
+        company_country: "Uganda",
         district_id: signupForm.district_id,
         constituency_id: signupForm.constituency_id,
         subcounty_id: signupForm.subcounty_id,
         parish_id: signupForm.parish_id,
+      };
+      const accountPayload = isOrganizationSignup
+        ? {
+            ...commonPayload,
+            type: "government organization",
+            company_name: signupForm.company_name.trim(),
+            fname: null,
+            lname: null,
+            gender: null,
+            parent_user_id: null,
+          }
+        : {
+            ...commonPayload,
+            type: "personal",
+            fname: signupForm.fname.trim(),
+            lname: signupForm.lname.trim(),
+            gender: signupForm.gender || null,
+            company_name: null,
+            parent_user_id: null,
+          };
+
+      await api.post<{ message: string; user: ApiUser }>("/signup", {
+        ...accountPayload,
         type_of_business: null,
         number_of_employees: null,
       });
       const identifier = signupForm.email.trim();
-      setSignupForm(initialSignupForm);
+      setSignupForms(createInitialSignupForms());
       setSignupOpen(false);
       setSignupSubmitted(false);
       handleLoginOpen({
@@ -1097,37 +1090,6 @@ const MenuHome = () => {
   const getLoginPasswordError = () => {
     if (!formData.password.trim()) {
       return "Password is required.";
-    }
-    return "";
-  };
-
-  const getDemoFullNameError = () => {
-    if (!demoForm.fullName.trim()) {
-      return "Full name is required.";
-    }
-    return "";
-  };
-
-  const getDemoWorkEmailError = () => {
-    if (!demoForm.workEmail.trim()) {
-      return "Work email is required.";
-    }
-    if (!EMAIL_PATTERN.test(demoForm.workEmail.trim())) {
-      return "Enter a valid work email address.";
-    }
-    return "";
-  };
-
-  const getDemoCompanyError = () => {
-    if (!demoForm.company.trim()) {
-      return "Organization is required.";
-    }
-    return "";
-  };
-
-  const getDemoTeamSizeError = () => {
-    if (!demoForm.teamSize.trim()) {
-      return "Engagement size is required.";
     }
     return "";
   };
@@ -1227,23 +1189,6 @@ const MenuHome = () => {
             >
               Sign Up
             </Button>
-            <Button
-              variant="contained"
-              onClick={() => scrollToSection("demo")}
-              sx={{
-                ...yellowButtonSx,
-                borderRadius: "999px",
-                px: 2.5,
-                py: 1,
-                boxShadow: "none",
-                "&:hover": {
-                  bgcolor: THEME_YELLOW_HOVER,
-                  boxShadow: "none",
-                },
-              }}
-            >
-              Request Walkthrough
-            </Button>
           </Stack>
         </Toolbar>
       </AppBar>
@@ -1288,10 +1233,11 @@ const MenuHome = () => {
                     fontSize: { xs: "2.7rem", md: "4.25rem" },
                     lineHeight: 1.05,
                     fontWeight: 700,
+                    letterSpacing: "-0.02em",
                     maxWidth: 720,
                   }}
                 >
-                  Make public feedback visible, useful, and accountable.
+                  Make your feedback visible, useful, and accountable.
                 </Typography>
                 <Typography
                   variant="h5"
@@ -1300,12 +1246,12 @@ const MenuHome = () => {
                     maxWidth: 640,
                     color: alpha("#FFFFFF", 0.9),
                     fontWeight: 400,
-                    lineHeight: 1.6,
+                    lineHeight: 1.55,
                     fontSize: { xs: "1.05rem", md: "1.25rem" },
                   }}
                 >
                   UGVoice helps Parliament, MPs, and committees hear from
-                  citizens, interpret public sentiment, and turn feedback into
+                  citizens. Interpret public sentiment and turn feedback into
                   clearer decisions and follow-up.
                 </Typography>
 
@@ -1537,19 +1483,19 @@ const MenuHome = () => {
                 variant="h3"
                 sx={{
                   fontWeight: 700,
-                  fontSize: { xs: "2rem", md: "3rem" },
+                  fontSize: { xs: "2rem", md: "2.75rem" },
                   lineHeight: 1.15,
+                  letterSpacing: "-0.01em",
                 }}
               >
-                A clearer system for collecting, understanding, and acting on
-                citizen feedback
+                A clearer way to collect, understand, and act on feedback
               </Typography>
               <Typography
                 sx={{
                   mt: 2,
                   color: alpha("#111111", 0.72),
                   fontSize: "1.05rem",
-                  lineHeight: 1.8,
+                  lineHeight: 1.7,
                 }}
               >
                 The platform helps Parliament and representatives replace
@@ -1577,30 +1523,23 @@ const MenuHome = () => {
                         borderRadius: "18px",
                         display: "grid",
                         placeItems: "center",
-                        background: feature.iconGradient,
-                        color: "#FFFFFF",
+                        backgroundColor: alpha(feature.iconColor, 0.1),
+                        color: feature.iconColor,
                         mb: 2.5,
                         mx: "auto",
-                        boxShadow: `0 14px 28px ${feature.iconShadow}`,
                       }}
                     >
-                      <Icon
-                        sx={{
-                          fontSize: 30,
-                          filter:
-                            "drop-shadow(0 2px 6px rgba(15, 23, 42, 0.18))",
-                        }}
-                      />
+                      <Icon sx={{ fontSize: 30 }} />
                     </Box>
                     <Typography
                       component="h3"
                       variant="h5"
-                      sx={{ fontWeight: 550, mb: 1.5 }}
+                      sx={{ fontWeight: 600, mb: 1.5 }}
                     >
                       {feature.title}
                     </Typography>
                     <Typography
-                      sx={{ color: alpha("#111111", 0.72), lineHeight: 1.75 }}
+                      sx={{ color: alpha("#111111", 0.72), lineHeight: 1.7 }}
                     >
                       {feature.description}
                     </Typography>
@@ -1630,8 +1569,9 @@ const MenuHome = () => {
                     variant="h3"
                     sx={{
                       fontWeight: 700,
-                      fontSize: { xs: "2rem", md: "2.8rem" },
-                      lineHeight: 1.2,
+                      fontSize: { xs: "2rem", md: "2.75rem" },
+                      lineHeight: 1.15,
+                      letterSpacing: "-0.01em",
                     }}
                   >
                     Public participation intelligence for Parliament, MPs, and
@@ -1641,8 +1581,8 @@ const MenuHome = () => {
                     sx={{
                       mt: 2.5,
                       color: alpha("#111111", 0.72),
-                      lineHeight: 1.85,
-                      fontSize: "1.04rem",
+                      lineHeight: 1.7,
+                      fontSize: "1.05rem",
                     }}
                   >
                     UGVoice gives public leaders a shared picture of citizen
@@ -1684,7 +1624,7 @@ const MenuHome = () => {
                       <Typography
                         component="h3"
                         variant="h6"
-                        sx={{ fontWeight: 650, mb: 1 }}
+                        sx={{ fontWeight: 600, mb: 1 }}
                       >
                         {item.title}
                       </Typography>
@@ -1699,216 +1639,6 @@ const MenuHome = () => {
               </Box>
             </Container>
           </SectionShell>
-        </Box>
-
-        <Box
-          id="demo"
-          component="section"
-          aria-labelledby="demo-heading"
-          sx={{
-            bgcolor: "#111111",
-            color: "#FFFFFF",
-            py: { xs: 9, md: 11 },
-            position: "relative",
-            overflow: "hidden",
-          }}
-        >
-          <Box
-            sx={{
-              position: "absolute",
-              inset: "auto auto -18% -6%",
-              width: 260,
-              height: 260,
-              borderRadius: "50%",
-              bgcolor: alpha("#FCDC04", 0.16),
-              filter: "blur(12px)",
-            }}
-          />
-          <Container sx={{ position: "relative", zIndex: 1 }}>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "0.95fr 1.05fr" },
-                gap: { xs: 4, lg: 6 },
-                alignItems: "start",
-              }}
-            >
-              <Box>
-                <SectionEyebrow sx={{ color: "#FCDC04" }}>
-                  Request A Walkthrough
-                </SectionEyebrow>
-                <Typography
-                  id="demo-heading"
-                  component="h2"
-                  variant="h3"
-                  sx={{
-                    fontWeight: 700,
-                    fontSize: { xs: "2rem", md: "3rem" },
-                    lineHeight: 1.15,
-                    color: "#FFFFFF",
-                  }}
-                >
-                  See how UGVoice can support parliamentary feedback
-                </Typography>
-                <Typography
-                  sx={{
-                    mt: 2.5,
-                    maxWidth: 600,
-                    color: alpha("#FFFFFF", 0.8),
-                    lineHeight: 1.85,
-                    fontSize: "1.02rem",
-                  }}
-                >
-                  Share a few details about your institution and goals, and
-                  we&apos;ll arrange a tailored walkthrough focused on citizen
-                  intake, sentiment, reporting, and parliamentary follow-up.
-                </Typography>
-                <Stack spacing={1.5} sx={{ mt: 4 }}>
-                  {[
-                    "Personalized walkthrough for Parliament, MPs, or civic teams",
-                    "Guidance on public intake, reporting, and analytics setup",
-                    "Clear next steps for pilots, onboarding, and national rollout",
-                  ].map((point) => (
-                    <Stack
-                      key={point}
-                      direction="row"
-                      spacing={1.25}
-                      alignItems="center"
-                    >
-                      <CheckCircleRoundedIcon sx={{ color: "#FCDC04" }} />
-                      <Typography sx={{ color: alpha("#FFFFFF", 0.82) }}>
-                        {point}
-                      </Typography>
-                    </Stack>
-                  ))}
-                </Stack>
-              </Box>
-
-              <Paper
-                elevation={6}
-                sx={{
-                  p: { xs: 2.5, md: 3.5 },
-                  bgcolor: "#FFFFFF",
-                  color: "#111111",
-                  boxShadow: "0 24px 60px rgba(2, 6, 23, 0.3)",
-                }}
-              >
-                <Typography
-                  component="h3"
-                  variant="h5"
-                  sx={{ fontWeight: 700 }}
-                >
-                  Book your walkthrough
-                </Typography>
-                <Typography
-                  sx={{ mt: 1, color: alpha("#111111", 0.64), mb: 3 }}
-                >
-                  We usually respond within one business day.
-                </Typography>
-
-                <Box component="form" onSubmit={handleDemoSubmit}>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" },
-                      gap: 2,
-                    }}
-                  >
-                    <TextField
-                      label="Full name"
-                      name="fullName"
-                      value={demoForm.fullName}
-                      onChange={handleDemoChange}
-                      required
-                      error={Boolean(demoSubmitted && getDemoFullNameError())}
-                      helperText={demoSubmitted ? getDemoFullNameError() : ""}
-                      fullWidth
-                    />
-                    <TextField
-                      label="Work email"
-                      name="workEmail"
-                      type="email"
-                      value={demoForm.workEmail}
-                      onChange={handleDemoChange}
-                      required
-                      error={Boolean(demoSubmitted && getDemoWorkEmailError())}
-                      helperText={demoSubmitted ? getDemoWorkEmailError() : ""}
-                      fullWidth
-                    />
-                    <TextField
-                      label="Organization"
-                      name="company"
-                      value={demoForm.company}
-                      onChange={handleDemoChange}
-                      required
-                      error={Boolean(demoSubmitted && getDemoCompanyError())}
-                      helperText={demoSubmitted ? getDemoCompanyError() : ""}
-                      fullWidth
-                    />
-                    <TextField
-                      label="Engagement size"
-                      name="teamSize"
-                      value={demoForm.teamSize}
-                      onChange={handleDemoChange}
-                      placeholder="e.g. 25 MPs, 50 staff, national pilot"
-                      required
-                      error={Boolean(demoSubmitted && getDemoTeamSizeError())}
-                      helperText={demoSubmitted ? getDemoTeamSizeError() : ""}
-                      fullWidth
-                    />
-                  </Box>
-
-                  <TextField
-                    label="What parliamentary feedback workflow would you like to see?"
-                    name="message"
-                    value={demoForm.message}
-                    onChange={handleDemoChange}
-                    multiline
-                    minRows={4}
-                    fullWidth
-                    sx={{ mt: 2 }}
-                  />
-
-                  <Stack
-                    direction={{ xs: "column", sm: "row" }}
-                    spacing={1.5}
-                    sx={{ mt: 3 }}
-                  >
-                    <Button
-                      type="submit"
-                      variant="contained"
-                      endIcon={<ArrowForwardRoundedIcon />}
-                      sx={{
-                        ...yellowButtonSx,
-                        borderRadius: "999px",
-                        px: 3,
-                        py: 1.3,
-                        boxShadow: "none",
-                        "&:hover": {
-                          bgcolor: THEME_YELLOW_HOVER,
-                          boxShadow: "none",
-                        },
-                      }}
-                    >
-                      Request Walkthrough
-                    </Button>
-                    <Button
-                      variant="outlined"
-                      onClick={handleSignupClick}
-                      sx={{
-                        ...darkOutlineButtonSx,
-                        borderRadius: "999px",
-                        px: 3,
-                        py: 1.3,
-                      }}
-                    >
-                      Sign Up
-                    </Button>
-                  </Stack>
-                </Box>
-              </Paper>
-            </Box>
-          </Container>
         </Box>
 
         <Box sx={{ bgcolor: "#000000", color: "#FFFFFF", py: 6 }}>
@@ -1928,7 +1658,7 @@ const MenuHome = () => {
                   sx={{
                     mt: 1.5,
                     color: alpha("#FFFFFF", 0.72),
-                    lineHeight: 1.8,
+                    lineHeight: 1.7,
                   }}
                 >
                   A modern parliamentary feedback platform that helps public
@@ -2392,8 +2122,6 @@ const MenuHome = () => {
                       }
                       fullWidth
                     >
-                      <MenuItem value="business">Business</MenuItem>
-                      <MenuItem value="ngo">NGO</MenuItem>
                       <MenuItem value="government organization">
                         Government Organization
                       </MenuItem>
@@ -2417,41 +2145,41 @@ const MenuHome = () => {
                     />
                   </Stack>
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                    <CountryAutocomplete
-                      value={signupForm.company_country}
-                      onChange={handleSignupCountryChange}
-                      textFieldProps={{
-                        name: "company_country",
-                        size: "small",
-                        fullWidth: true,
-                      }}
+                    <TextField
+                      label="Country"
+                      name="company_country"
+                      size="small"
+                      value="Uganda"
+                      disabled
+                      fullWidth
                     />
                   </Stack>
-                  <UgandaLocationFields
-                    value={{
-                      district_id: signupForm.district_id,
-                      constituency_id: signupForm.constituency_id,
-                      subcounty_id: signupForm.subcounty_id,
-                      parish_id: signupForm.parish_id,
-                    }}
-                    onChange={handleSignupLocationChange}
-                    size="small"
-                  />
                 </>
               )}
               {!isOrganizationSignup ? (
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                  <CountryAutocomplete
+                  <TextField
                     label="Country"
-                    value={signupForm.company_country}
-                    onChange={handleSignupCountryChange}
-                    textFieldProps={{
-                      name: "company_country",
-                      size: "small",
-                      fullWidth: true,
-                    }}
+                    name="company_country"
+                    size="small"
+                    value="Uganda"
+                    disabled
+                    fullWidth
                   />
                 </Stack>
+              ) : null}
+              <UgandaLocationFields
+                value={{
+                  district_id: signupForm.district_id,
+                  constituency_id: signupForm.constituency_id,
+                  subcounty_id: signupForm.subcounty_id,
+                  parish_id: signupForm.parish_id,
+                }}
+                onChange={handleSignupLocationChange}
+                size="small"
+              />
+              {signupSubmitted && getSignupLocationError() ? (
+                <Alert severity="error">{getSignupLocationError()}</Alert>
               ) : null}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                 <PhoneNumberField
@@ -2461,7 +2189,7 @@ const MenuHome = () => {
                   country={signupForm.company_country}
                   value={signupForm.mobile_number}
                   onChange={(value) =>
-                    setSignupForm((current) => ({
+                    updateSignupForm((current) => ({
                       ...current,
                       mobile_number: value,
                     }))

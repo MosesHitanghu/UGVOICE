@@ -34,6 +34,29 @@ const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
 const normalizeColor = (value: unknown, fallback: string) =>
   typeof value === "string" && HEX_COLOR_PATTERN.test(value) ? value.toUpperCase() : fallback;
 
+const customThemeStorageKey = (userId?: number | null) =>
+  userId ? `${CUSTOM_THEME_COLORS_KEY}:${userId}` : CUSTOM_THEME_COLORS_KEY;
+
+export const normalizeCustomThemeColors = (colors?: Partial<CustomThemeColors> | null): CustomThemeColors => ({
+  colorOne: normalizeColor(colors?.colorOne, DEFAULT_CUSTOM_THEME_COLORS.colorOne),
+  colorTwo: normalizeColor(colors?.colorTwo, DEFAULT_CUSTOM_THEME_COLORS.colorTwo),
+  colorThree: normalizeColor(colors?.colorThree, DEFAULT_CUSTOM_THEME_COLORS.colorThree),
+  white: "#FFFFFF",
+});
+
+export const parseCustomThemeColors = (value?: unknown): CustomThemeColors | null => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return normalizeCustomThemeColors(parsed as Partial<CustomThemeColors>);
+  } catch {
+    return null;
+  }
+};
+
 export const getContrastText = (hexColor: string) => {
   const normalized = normalizeColor(hexColor, "#000000").replace("#", "");
   const red = parseInt(normalized.slice(0, 2), 16);
@@ -44,39 +67,41 @@ export const getContrastText = (hexColor: string) => {
   return luminance > 0.62 ? "#111111" : "#FFFFFF";
 };
 
-export const getStoredCustomThemeColors = (): CustomThemeColors => {
+export const getStoredCustomThemeColors = (
+  userId?: number | null,
+  profileThemeColors?: unknown,
+): CustomThemeColors => {
+  const profileColors = parseCustomThemeColors(profileThemeColors);
+
   if (typeof localStorage === "undefined") {
-    return DEFAULT_CUSTOM_THEME_COLORS;
+    return profileColors || DEFAULT_CUSTOM_THEME_COLORS;
   }
 
   try {
-    const stored = JSON.parse(
-      localStorage.getItem(CUSTOM_THEME_COLORS_KEY) || "{}",
-    ) as Partial<CustomThemeColors>;
+    const scopedColors = parseCustomThemeColors(
+      localStorage.getItem(customThemeStorageKey(userId)),
+    );
+    if (scopedColors) {
+      return scopedColors;
+    }
 
-    return {
-      colorOne: normalizeColor(stored.colorOne, DEFAULT_CUSTOM_THEME_COLORS.colorOne),
-      colorTwo: normalizeColor(stored.colorTwo, DEFAULT_CUSTOM_THEME_COLORS.colorTwo),
-      colorThree: normalizeColor(stored.colorThree, DEFAULT_CUSTOM_THEME_COLORS.colorThree),
-      white: "#FFFFFF",
-    };
-  } catch {
+    if (profileColors) {
+      return profileColors;
+    }
+
     return DEFAULT_CUSTOM_THEME_COLORS;
+  } catch {
+    return profileColors || DEFAULT_CUSTOM_THEME_COLORS;
   }
 };
 
-export const storeCustomThemeColors = (colors: CustomThemeColors) => {
-  const normalizedColors: CustomThemeColors = {
-    colorOne: normalizeColor(colors.colorOne, DEFAULT_CUSTOM_THEME_COLORS.colorOne),
-    colorTwo: normalizeColor(colors.colorTwo, DEFAULT_CUSTOM_THEME_COLORS.colorTwo),
-    colorThree: normalizeColor(colors.colorThree, DEFAULT_CUSTOM_THEME_COLORS.colorThree),
-    white: "#FFFFFF",
-  };
+export const storeCustomThemeColors = (colors: CustomThemeColors, userId?: number | null) => {
+  const normalizedColors = normalizeCustomThemeColors(colors);
 
-  localStorage.setItem(CUSTOM_THEME_COLORS_KEY, JSON.stringify(normalizedColors));
+  localStorage.setItem(customThemeStorageKey(userId), JSON.stringify(normalizedColors));
   window.dispatchEvent(
     new CustomEvent(CUSTOM_THEME_COLORS_EVENT, {
-      detail: { colors: normalizedColors },
+      detail: { colors: normalizedColors, userId },
     }),
   );
 };

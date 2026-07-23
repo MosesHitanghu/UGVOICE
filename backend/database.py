@@ -1,6 +1,8 @@
 import json
+import os
 from importlib.resources import files
 from pathlib import Path
+from urllib.parse import quote_plus
 from uuid import uuid4
 
 import db_models
@@ -8,7 +10,14 @@ from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+from dotenv import load_dotenv
 
+
+BACKEND_DIR = Path(__file__).resolve().parent
+load_dotenv(BACKEND_DIR.parent / ".env.local")
+load_dotenv(BACKEND_DIR / ".env.local")
+load_dotenv(BACKEND_DIR / ".env")
 
 DB_NAME = "mambo_db"
 DB_USER = "postgres"
@@ -16,10 +25,90 @@ DB_PASS = "Goodness"
 DB_HOST = "localhost"
 DB_PORT = "5432"
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL_ENV_NAMES = (
+    "trueplot_DATABASE_URL",
+    "trueplot_POSTGRES_URL",
+    "DATABASE_URL",
+    "POSTGRES_URL",
+    "DATABASE_URL_UNPOOLED",
+    "POSTGRES_URL_NON_POOLING",
+    "POSTGRES_PRISMA_URL",
+    "POSTGRES_URL_NO_SSL",
+    "NEON_DATABASE_URL",
+    "NEON_POSTGRES_URL",
+)
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
-BACKEND_DIR = Path(__file__).resolve().parent
+DATABASE_COMPONENT_PREFIXES = (
+    "trueplot_DATABASE_URL",
+    "trueplot_POSTGRES_URL",
+    "POSTGRES",
+    "NEON",
+)
+
+
+def normalize_database_url(value: str) -> str:
+    normalized = value.strip().strip("'\"")
+    if normalized.startswith("postgres://"):
+        normalized = normalized.replace("postgres://", "postgresql://", 1)
+    return normalized
+
+
+def is_valid_database_url(value: str) -> bool:
+    if "://" not in value:
+        return False
+    try:
+        make_url(value)
+    except Exception:
+        return False
+    return True
+
+
+def build_database_url_from_components(prefix: str) -> str | None:
+    user = os.getenv(f"{prefix}_USER") or os.getenv(f"{prefix}_PGUSER")
+    password = os.getenv(f"{prefix}_PASSWORD") or os.getenv(f"{prefix}_PGPASSWORD")
+    host = os.getenv(f"{prefix}_HOST") or os.getenv(f"{prefix}_PGHOST")
+    database = (
+        os.getenv(f"{prefix}_DATABASE")
+        or os.getenv(f"{prefix}_PGDATABASE")
+        or os.getenv(f"{prefix}_DB")
+    )
+    port = os.getenv(f"{prefix}_PORT") or os.getenv(f"{prefix}_PGPORT") or "5432"
+
+    if not all([user, password, host, database]):
+        return None
+
+    return (
+        f"postgresql://{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{quote_plus(database)}?sslmode=require"
+    )
+
+
+def get_database_url() -> str | None:
+    for env_name in DATABASE_URL_ENV_NAMES:
+        value = os.getenv(env_name)
+        if not value:
+            continue
+        database_url = normalize_database_url(value)
+        if is_valid_database_url(database_url):
+            return database_url
+
+    for prefix in DATABASE_COMPONENT_PREFIXES:
+        database_url = build_database_url_from_components(prefix)
+        if database_url and is_valid_database_url(database_url):
+            return database_url
+
+    return None
+
+
+LOCAL_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+CONFIGURED_DATABASE_URL = get_database_url()
+SQLALCHEMY_DATABASE_URL = CONFIGURED_DATABASE_URL or LOCAL_DATABASE_URL
+
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_pre_ping=True,
+    poolclass=NullPool,
+)
 COUNTRIES_SOURCE_PATH = files("tzdata.zoneinfo").joinpath("iso3166.tab")
 UGANDA_HIERARCHY_PATH = BACKEND_DIR / "uganda_administrative_hierarchy.json"
 KAMPALA_HIERARCHY_PATH = BACKEND_DIR / "kampala_administrative_structure.json"
@@ -61,6 +150,15 @@ def sync_table_id_sequence(connection, table_name: str):
 
 
 def ensure_database_exists():
+    # Managed PostgreSQL providers provision the database and commonly deny
+    # CREATE DATABASE. Only local development creates it implicitly by default.
+    create_database = os.getenv(
+        "UGVOICE_CREATE_DATABASE",
+        "false" if CONFIGURED_DATABASE_URL else "true",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not create_database:
+        return
+
     # Connect to a known admin database first so we can create the app database if it is missing.
     url = make_url(SQLALCHEMY_DATABASE_URL)
     target_database = url.database
@@ -238,6 +336,22 @@ def ensure_post_reviews_table():
             connection.execute(text("ALTER TABLE post_comments RENAME TO post_reviews"))
 
 
+def drop_obsolete_messaging_tables():
+    """Remove the retired private-messaging schema and all stored chat data."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                DROP TABLE IF EXISTS
+                    messaging_conversation_participants,
+                    messaging_messages,
+                    messaging_conversations
+                CASCADE
+                """
+            )
+        )
+
+
 def ensure_primary_key_sequences():
     # Keep serial/identity sequences aligned after table renames, merges, or manual seeded inserts.
     with engine.begin() as connection:
@@ -402,6 +516,14 @@ def ensure_users_gender_column():
     with engine.begin() as connection:
         connection.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS gender VARCHAR")
+        )
+
+
+def ensure_users_theme_colors_column():
+    # Profile-specific dashboard palette settings are stored as normalized JSON.
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_colors TEXT")
         )
 
 
@@ -691,6 +813,21 @@ def ensure_feedback_analysis_columns():
         )
         connection.execute(
             text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS sentiment_model VARCHAR")
+        )
+        connection.execute(
+            text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS inference_provider VARCHAR")
+        )
+        connection.execute(
+            text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS inference_mode VARCHAR")
+        )
+        connection.execute(
+            text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS inference_fallback_used BOOLEAN")
+        )
+        connection.execute(
+            text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS inference_fallback_tasks TEXT")
+        )
+        connection.execute(
+            text("ALTER TABLE feedbacks ADD COLUMN IF NOT EXISTS inference_latency_ms INTEGER")
         )
 
 
@@ -1315,6 +1452,7 @@ def seed_kampala_administrative_hierarchy():
 
 def initialize_database(*, include_reference_data: bool = True):
     ensure_database_exists()
+    drop_obsolete_messaging_tables()
     ensure_users_table()
     ensure_reviews_table()
     ensure_post_reviews_table()
@@ -1334,6 +1472,7 @@ def initialize_database(*, include_reference_data: bool = True):
     ensure_users_status_column()
     ensure_users_visibility_column()
     ensure_users_gender_column()
+    ensure_users_theme_colors_column()
     ensure_users_personal_account_type()
     ensure_users_district_column()
     ensure_users_constituency_column()

@@ -58,7 +58,6 @@ import ForumRoundedIcon from "@mui/icons-material/ForumRounded";
 import Groups2RoundedIcon from "@mui/icons-material/Groups2Rounded";
 import InsightsRoundedIcon from "@mui/icons-material/InsightsRounded";
 import MoreHorizRoundedIcon from "@mui/icons-material/MoreHorizRounded";
-import PersonSearchRoundedIcon from "@mui/icons-material/PersonSearchRounded";
 import RateReviewRoundedIcon from "@mui/icons-material/RateReviewRounded";
 import RemoveRedEyeRoundedIcon from "@mui/icons-material/RemoveRedEyeRounded";
 import ReportProblemRoundedIcon from "@mui/icons-material/ReportProblemRounded";
@@ -263,6 +262,7 @@ type NationalPayload = {
 type DistributionKey = "age_groups" | "gender" | "parishes" | "subcounty";
 type DemographyKey = "regions" | "districts" | "constituencies" | "divisions" | "parishes";
 type EmergingIssueSentimentFilter = "All" | "Positive" | "Negative";
+type IssueDemographyField = "region" | "district" | "constituency" | "division" | "parish";
 type PriorityLevel = "High" | "Medium" | "Low";
 type NormalizedIssue = {
   id: number | string;
@@ -412,6 +412,41 @@ const normalizeIssue = (issue: IssueRow): NormalizedIssue => {
   };
 };
 
+const issueDemographyField: Record<DemographyKey, IssueDemographyField> = {
+  regions: "region",
+  districts: "district",
+  constituencies: "constituency",
+  divisions: "division",
+  parishes: "parish",
+};
+
+const issueWeight = (issue: NormalizedIssue) => Math.max(issue.feedbackCount, 1);
+
+const aggregateIssuesBy = (
+  issues: NormalizedIssue[],
+  getLabel: (issue: NormalizedIssue) => string,
+) => {
+  const totals = new Map<string, number>();
+
+  issues.forEach((issue) => {
+    const label = getLabel(issue).trim() || "Unspecified";
+    totals.set(label, (totals.get(label) || 0) + issueWeight(issue));
+  });
+
+  return Array.from(totals.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
+};
+
+const aggregateIssuesBySentiment = (issues: NormalizedIssue[]) => {
+  const totals = aggregateIssuesBy(issues, (issue) => issue.sentiment || "Unknown");
+  const map = new Map(totals.map((item) => [item.label, item.value]));
+
+  return ["Positive", "Neutral", "Negative", "Unknown"]
+    .map((label) => ({ label, value: map.get(label) || 0 }))
+    .filter((item) => item.value > 0);
+};
+
 const card = (tone: string) => ({
   width: 48,
   height: 48,
@@ -553,6 +588,7 @@ const EmergingIssueCard = ({
 
 const EmergingIssuesPage = ({
   issues,
+  title = "Top 10 Emerging Issues",
   subtitle,
   loading,
   error,
@@ -560,43 +596,26 @@ const EmergingIssuesPage = ({
   onViewFeedbacks,
 }: {
   issues: IssueRow[];
+  title?: string;
   subtitle: string;
   loading?: boolean;
   error?: string;
   onRefresh: () => void;
   onViewFeedbacks: (issue: NormalizedIssue) => void;
 }) => {
-  const [sentimentFilter, setSentimentFilter] = useState<EmergingIssueSentimentFilter>("All");
   const normalizedIssues = issues
     .map(normalizeIssue)
     .sort((left, right) => right.feedbackCount - left.feedbackCount || left.title.localeCompare(right.title));
-  const filteredIssues = normalizedIssues.filter((issue) => (
-    sentimentFilter === "All" || issue.sentiment === sentimentFilter || issue.sentiment === "Unknown"
-  )).slice(0, 10);
+  const topIssues = normalizedIssues.slice(0, 10);
 
   return (
     <Paper elevation={3} sx={{ p: 3, height: "100%" }}>
       <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "stretch", sm: "flex-start" }} justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
         <Box>
-          <Typography variant="h6" sx={{ fontWeight: 700 }}>Emerging Issues</Typography>
+          <Typography variant="h6" sx={{ fontWeight: 700 }}>{title}</Typography>
           <Typography color="text.secondary" variant="body2" sx={{ mt: 0.75 }}>{subtitle}</Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: "space-between", sm: "flex-end" }}>
-          <RadioGroup
-            row
-            value={sentimentFilter}
-            onChange={(event) => setSentimentFilter(event.target.value as EmergingIssueSentimentFilter)}
-            aria-label="Filter emerging issues by sentiment"
-            sx={{
-              flexWrap: "nowrap",
-              "& .MuiFormControlLabel-root": { mr: 1 },
-              "& .MuiFormControlLabel-label": { fontSize: "0.875rem" },
-            }}
-          >
-            <FormControlLabel value="All" control={<Radio size="small" />} label="All" />
-            <FormControlLabel value="Positive" control={<Radio size="small" />} label="Positive" />
-            <FormControlLabel value="Negative" control={<Radio size="small" />} label="Negative" />
-          </RadioGroup>
           <Tooltip title="Refresh emerging issues">
             <IconButton onClick={onRefresh} size="small" color="primary" aria-label="Refresh emerging issues">
               <RefreshRoundedIcon />
@@ -622,9 +641,9 @@ const EmergingIssuesPage = ({
         </Stack>
       ) : error ? (
         <Alert severity="error">Unable to load emerging issues. Please try again.</Alert>
-      ) : filteredIssues.length ? (
+      ) : topIssues.length ? (
         <Stack spacing={1.5} sx={{ maxHeight: 520, overflowY: "auto", pr: 0.5 }}>
-          {filteredIssues.map((issue) => (
+          {topIssues.map((issue) => (
             <EmergingIssueCard
               key={issue.id}
               issue={issue}
@@ -633,7 +652,7 @@ const EmergingIssuesPage = ({
           ))}
         </Stack>
       ) : (
-        <Empty message={`No ${sentimentFilter.toLowerCase()} emerging issues detected yet. Run topic modelling to generate insights from citizen feedback.`} />
+        <Empty message="No emerging issues detected yet. Run topic modelling to generate insights from citizen feedback." />
       )}
     </Paper>
   );
@@ -697,16 +716,17 @@ const EMERGING_ISSUE_TIMEFRAMES = [
   { value: "yearly", label: "Past year" },
 ];
 
-function GridToolbar(props: GridToolbarProps & { title: string; icon: React.ReactNode }) {
-  const { title, icon, ...toolbarProps } = props;
+function GridToolbar(props: GridToolbarProps & { title: string; icon: React.ReactNode; actions?: React.ReactNode }) {
+  const { title, icon, actions, ...toolbarProps } = props;
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const open = Boolean(anchorEl);
   return (
     <Toolbar {...toolbarProps}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1, minWidth: 0 }}>
         <Box sx={(theme) => ({ width: 34, height: 34, borderRadius: "12px", display: "grid", placeItems: "center", bgcolor: alpha(theme.palette.primary.main, 0.1), color: "primary.main" })}>{icon}</Box>
-        <Typography fontWeight={700}>{title}</Typography>
+        <Typography fontWeight={700} noWrap>{title}</Typography>
       </Box>
+      {actions}
       <Tooltip title="Columns" placement="top" arrow><ColumnsPanelTrigger render={<ToolbarButton />}><ViewColumnIcon fontSize="small" /></ColumnsPanelTrigger></Tooltip>
       <Tooltip title="Filters" placement="top" arrow>
         <FilterPanelTrigger render={(filterProps, state) => (
@@ -748,6 +768,7 @@ function GridToolbar(props: GridToolbarProps & { title: string; icon: React.Reac
 
 export default function Main() {
   const theme = useTheme();
+  const isBelowSm = useMediaQuery(theme.breakpoints.down("sm"));
   const isBelowMd = useMediaQuery(theme.breakpoints.down("md"));
   const isBelowLg = useMediaQuery(theme.breakpoints.down("lg"));
   const isBelowXl = useMediaQuery(theme.breakpoints.down("xl"));
@@ -761,6 +782,7 @@ export default function Main() {
   const [distribution, setDistribution] = useState<DistributionKey>("age_groups");
   const [reviewDemography, setReviewDemography] = useState<DemographyKey>("districts");
   const [feedbackDemography, setFeedbackDemography] = useState<DemographyKey>("districts");
+  const [nationalIssueSentimentFilter, setNationalIssueSentimentFilter] = useState<EmergingIssueSentimentFilter>("All");
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1066,10 +1088,15 @@ export default function Main() {
   ], [handleChangeIssueStatus, handleViewIssueFeedbacks]);
 
   const nationalIssueColumnVisibility = {
+    rowNumber: !isBelowSm,
+    feedbackCount: !isBelowSm,
     region: !isBelowMd,
+    district: !isBelowSm,
     constituency: !isBelowLg,
     division: !isBelowXl,
     parish: !isBelowXl,
+    status: !isBelowSm,
+    sentiment: !isBelowMd,
     generatedAt: !isBelowLg,
   };
 
@@ -1081,21 +1108,71 @@ export default function Main() {
     "& .MuiDataGrid-row:hover": { backgroundColor: theme.palette.action.hover, cursor: "pointer" },
   };
 
-  const renderBars = (items: ChartDatum[], color: string, empty: string, height = 310) =>
+  const renderBars = (
+    items: ChartDatum[],
+    color: string,
+    empty: string,
+    height = 310,
+    xAxisLabel?: string,
+  ) =>
     items.length ? (
       <Box sx={{ width: "100%" }}>
         <BarChart
           height={height}
-          xAxis={[{ scaleType: "band", data: items.map((item) => item.label) }]}
+          xAxis={[
+            {
+              scaleType: "band",
+              data: items.map((item) => item.label),
+              label: xAxisLabel,
+            },
+          ]}
           series={[{ data: items.map((item) => item.value), color }]}
           borderRadius={8}
           grid={{ horizontal: true }}
-          margin={{ left: 48, right: 16, top: 12, bottom: 52 }}
+          margin={{ left: 48, right: 16, top: 12, bottom: xAxisLabel ? 72 : 52 }}
         />
       </Box>
     ) : (
       <Empty message={empty} />
     );
+
+  const feedbackSentimentOrder = ["Positive", "Negative", "Neutral"];
+  const feedbackSentimentColors: Record<string, string> = {
+    Positive: theme.palette.success.main,
+    Negative: theme.palette.error.main,
+    Neutral: theme.palette.info.main,
+  };
+
+  const renderFeedbackSentimentBars = (items: ChartDatum[]) => {
+    const valueByLabel = new Map(items.map((item) => [item.label, item.value]));
+    const orderedItems = feedbackSentimentOrder.map((label) => ({
+      label,
+      value: valueByLabel.get(label) || 0,
+    }));
+    const hasValues = orderedItems.some((item) => item.value > 0);
+
+    if (!hasValues) {
+      return <Empty message="No feedback sentiment data is available yet." />;
+    }
+
+    return (
+      <Box sx={{ width: "100%" }}>
+        <BarChart
+          height={310}
+          xAxis={[{ scaleType: "band", data: orderedItems.map((item) => item.label), label: "Sentiments" }]}
+          series={orderedItems.map((sentiment) => ({
+            label: sentiment.label,
+            data: orderedItems.map((item) => (item.label === sentiment.label ? item.value : null)),
+            color: feedbackSentimentColors[sentiment.label],
+            stack: "sentiments",
+          }))}
+          borderRadius={8}
+          grid={{ horizontal: true }}
+          margin={{ left: 48, right: 16, top: 12, bottom: 72 }}
+        />
+      </Box>
+    );
+  };
 
   const topChartItems = (items: ChartDatum[], limit = 10) =>
     [...items]
@@ -1250,13 +1327,6 @@ export default function Main() {
     divisions: nationalData?.reviews.charts.divisions ?? [],
     parishes: nationalData?.reviews.charts.parishes ?? [],
   };
-  const feedbackDemographyMap = {
-    regions: nationalData?.feedbacks.charts.regions ?? [],
-    districts: nationalData?.feedbacks.charts.districts ?? [],
-    constituencies: nationalData?.feedbacks.charts.constituencies ?? [],
-    divisions: nationalData?.feedbacks.charts.divisions ?? [],
-    parishes: nationalData?.feedbacks.charts.parishes ?? [],
-  };
   const demographyTitle: Record<DemographyKey, string> = {
     regions: "Region",
     districts: "District",
@@ -1264,14 +1334,17 @@ export default function Main() {
     divisions: "Division",
     parishes: "Parish",
   };
-  const nationalEmergingIssueSentiments = ["Positive", "Neutral", "Negative"].map((label) => ({
-    label,
-    value: nationalData?.feedbacks.charts.sentiments.find((item) => item.label === label)?.value || 0,
-  }));
   const nationalIssueRows = (nationalData?.feedbacks.emerging_issues ?? [])
     .map(normalizeIssue)
     .sort((left, right) => right.feedbackCount - left.feedbackCount || left.title.localeCompare(right.title));
-  const nationalIssueGridRows = nationalIssueRows;
+  const nationalIssueGridRows = nationalIssueRows.filter((issue) => (
+    nationalIssueSentimentFilter === "All" || issue.sentiment === nationalIssueSentimentFilter
+  ));
+  const nationalIssueDemography = aggregateIssuesBy(
+    nationalIssueGridRows,
+    (issue) => issue.raw[issueDemographyField[feedbackDemography]] || "Unspecified",
+  );
+  const nationalEmergingIssueSentiments = aggregateIssuesBySentiment(nationalIssueGridRows);
   const stripedRowClassName = (index: number, extraClass = "") =>
     [index % 2 === 0 ? "grid-row-even" : "grid-row-odd", extraClass].filter(Boolean).join(" ");
 
@@ -1391,7 +1464,7 @@ export default function Main() {
           <Grid container spacing={2}>
             <Grid size={{ xs: 12, xl: 6 }}>
               <Panel title="Feedback Sentiments" subtitle="Sentiment spread across received feedback">
-                {renderBars(data.feedbacks.charts.sentiments, theme.palette.primary.main, "No feedback sentiment data is available yet.")}
+                {renderFeedbackSentimentBars(data.feedbacks.charts.sentiments)}
               </Panel>
             </Grid>
             <Grid size={{ xs: 12, xl: 6 }}>
@@ -1509,20 +1582,14 @@ export default function Main() {
       ) : tab === 3 && canViewNationalAnalytics && nationalData ? (
         <Stack spacing={3}>
           <Grid container spacing={2}>
-            <Grid size={{ xs: 12, md: 6, xl: 2.4 }}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Metric title="National Emerging Issues" value={nationalData.feedbacks.emerging_issues.length} tone="#D90000" icon={<FeedbackRoundedIcon />} helper="Modelled from citizen feedback records" />
             </Grid>
-            <Grid size={{ xs: 12, md: 6, xl: 2.4 }}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Metric title="Pending" value={nationalData.feedbacks.summary.pending_feedbacks} tone="#FCDC04" icon={<ReportProblemRoundedIcon />} helper="Waiting for action or analysis" />
             </Grid>
-            <Grid size={{ xs: 12, md: 6, xl: 2.4 }}>
+            <Grid size={{ xs: 12, md: 4 }}>
               <Metric title="Analysed" value={nationalData.feedbacks.summary.analysed_feedbacks} tone="#D90000" icon={<InsightsRoundedIcon />} helper="Feedbacks marked analysed" />
-            </Grid>
-            <Grid size={{ xs: 12, md: 6, xl: 2.4 }}>
-              <Metric title="Authors" value={nationalData.feedbacks.summary.unique_authors} tone="#D90000" icon={<Groups2RoundedIcon />} helper="Unique feedback authors" />
-            </Grid>
-            <Grid size={{ xs: 12, md: 6, xl: 2.4 }}>
-              <Metric title="Targets" value={nationalData.feedbacks.summary.unique_targets} tone="#990000" icon={<PersonSearchRoundedIcon />} helper="Unique feedback recipients" />
             </Grid>
           </Grid>
 
@@ -1563,7 +1630,7 @@ export default function Main() {
                       />
                     ))}
                   </Stack>
-                  {renderHorizontalTopBars(feedbackDemographyMap[feedbackDemography], "#990000", "No national emerging issue demography data is available yet.")}
+                  {renderHorizontalTopBars(nationalIssueDemography, "#990000", "No national emerging issue demography data is available yet.")}
                 </Stack>
               </Panel>
             </Grid>
@@ -1573,15 +1640,14 @@ export default function Main() {
               </Panel>
             </Grid>
             <Grid size={{ xs: 12, xl: 6 }}>
-              <Panel title="Emerging Issues Sentiments" subtitle="All sentiment percentages from national feedbacks">
+              <Panel title="Emerging Issues Sentiments" subtitle="Sentiment split from the emerging issues shown below">
                 {renderPie(nationalEmergingIssueSentiments, "No emerging issue sentiment data is available yet.")}
               </Panel>
             </Grid>
           </Grid>
 
-          <Paper id="national-emerging-issues-records" elevation={3} sx={{ p: { xs: 1, md: 2 }, scrollMarginTop: 96, width: "100%", maxWidth: "100%", minWidth: 0, overflow: "hidden" }}>
-            <Box sx={{ width: "100%", maxWidth: "100%", overflowX: "auto", overflowY: "hidden", pb: 1 }}>
-              <Box sx={{ height: 560, minWidth: { xs: 1120, lg: 1280 }, width: "100%" }}>
+          <Paper id="national-emerging-issues-records" elevation={3} sx={{ p: { xs: 1, sm: 1.5, md: 2 }, scrollMarginTop: 96, width: "100%", maxWidth: "100%", minWidth: 0, overflow: "hidden" }}>
+            <Box sx={{ height: { xs: 620, md: 560 }, width: "100%", minWidth: 0 }}>
                 <DataGrid
                   rows={nationalIssueGridRows}
                   columns={nationalIssueColumns}
@@ -1589,7 +1655,58 @@ export default function Main() {
                   getRowId={(row) => row.id}
                   initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
                   pageSizeOptions={[5, 10, 20, 50]}
-                  slots={{ toolbar: (toolbarProps) => <GridToolbar {...toolbarProps} title="National Emerging Issues" icon={<InsightsRoundedIcon fontSize="small" />} /> }}
+                  slots={{
+                    toolbar: (toolbarProps) => (
+                      <GridToolbar
+                        {...toolbarProps}
+                        title="Emerging Issues"
+                        icon={<InsightsRoundedIcon fontSize="small" />}
+                        actions={
+                          <Stack
+                            direction="row"
+                            spacing={1}
+                            alignItems="center"
+                            justifyContent="flex-end"
+                            sx={{
+                              flexWrap: { xs: "wrap", md: "nowrap" },
+                              mr: { xs: 0, md: 0.5 },
+                            }}
+                          >
+                            <RadioGroup
+                              row
+                              value={nationalIssueSentimentFilter}
+                              onChange={(event) => setNationalIssueSentimentFilter(event.target.value as EmergingIssueSentimentFilter)}
+                              aria-label="Filter national emerging issues by sentiment"
+                              sx={{
+                                flexWrap: "nowrap",
+                                "& .MuiFormControlLabel-root": { mr: { xs: 0.5, sm: 1 } },
+                                "& .MuiFormControlLabel-label": { fontSize: "0.82rem" },
+                              }}
+                            >
+                              <FormControlLabel value="All" control={<Radio size="small" />} label="All" />
+                              <FormControlLabel value="Positive" control={<Radio size="small" />} label="Positive" />
+                              <FormControlLabel value="Negative" control={<Radio size="small" />} label="Negative" />
+                            </RadioGroup>
+                            <Tooltip title="Refresh emerging issues">
+                              <IconButton
+                                onClick={() => {
+                                  setIssueRefreshScope("national");
+                                  setIssueRefreshError("");
+                                  setIssueRefreshMessage("");
+                                  setIssueRefreshOpen(true);
+                                }}
+                                size="small"
+                                color="primary"
+                                aria-label="Refresh national emerging issues"
+                              >
+                                <RefreshRoundedIcon />
+                              </IconButton>
+                            </Tooltip>
+                          </Stack>
+                        }
+                      />
+                    ),
+                  }}
                   showToolbar
                   disableRowSelectionOnClick
                   sx={{
@@ -1602,7 +1719,6 @@ export default function Main() {
                   }}
                   getRowClassName={(params) => stripedRowClassName(params.indexRelativeToCurrentPage)}
                 />
-              </Box>
             </Box>
           </Paper>
         </Stack>

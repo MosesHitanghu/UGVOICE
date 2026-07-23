@@ -9,14 +9,12 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
- 
+
 
 import CenteredLoader from "../../components/CenteredLoader";
-import CountryAutocomplete from "../../components/CountryAutocomplete";
 import PhoneNumberField from "../../components/PhoneNumberField";
 import UgandaLocationFields from "../../components/UgandaLocationFields";
 import { api, type ApiUser } from "../../lib/api";
-import { rebasePhoneNumberToCountry } from "../../lib/countryPhoneMeta";
 import { getStoredUser, storeUser } from "../../lib/session";
 
 const MOBILE_PATTERN = /^[+\d][\d\s-]{6,}$/;
@@ -78,22 +76,6 @@ const ProfilePage = ({ embedded = false }: ProfilePageProps) => {
         ? {
             ...current,
             [name]: value,
-          }
-        : current,
-    );
-  };
-
-  const handleCountryChange = (country: string) => {
-    setUser((current) =>
-      current
-        ? {
-            ...current,
-            company_country: country,
-            mobile_number: rebasePhoneNumberToCountry(
-              current.mobile_number,
-              current.company_country,
-              country,
-            ),
           }
         : current,
     );
@@ -215,14 +197,12 @@ const ProfilePage = ({ embedded = false }: ProfilePageProps) => {
             />
           </Stack>
 
-          <CountryAutocomplete
+          <TextField
             label="Country"
-            value={user.company_country || ""}
-            onChange={handleCountryChange}
-            textFieldProps={{
-              name: "company_country",
-              fullWidth: true,
-            }}
+            name="company_country"
+            value="Uganda"
+            disabled
+            fullWidth
           />
 
           <Stack direction={{ xs: "column", md: "row" }} spacing={2}>

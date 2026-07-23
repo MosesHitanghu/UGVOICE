@@ -48,10 +48,8 @@ import {
   touchSessionActivity,
 } from "../../lib/session";
 import ProfilePage from "./ProfilePage";
-import CountryAutocomplete from "../../components/CountryAutocomplete";
 import PhoneNumberField from "../../components/PhoneNumberField";
 import UgandaLocationFields from "../../components/UgandaLocationFields";
-import { rebasePhoneNumberToCountry } from "../../lib/countryPhoneMeta";
 import {
   CUSTOM_THEME_COLORS_EVENT,
   UGANDA_FLAG_COLORS_EVENT,
@@ -62,6 +60,7 @@ import {
   type UgandaFlagColors,
 } from "../../lib/ugandaTheme";
 const drawerWidth = 240;
+const APP_FONT_FAMILY = '"Google Sans", "Segoe UI", sans-serif';
 const LAST_SEEN_PUBLIC_POST_KEY = "ugvoice_last_seen_public_post_id";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE_PATTERN = /^[+\d][\d\s-]{6,}$/;
@@ -108,9 +107,9 @@ const initialOrganizationAccountForm: OrganizationAccountForm = {
   password: "",
   mobile_number: "",
   visibility: "public",
-  type: "business",
+  type: "government organization",
   company_name: "",
-  company_country: "",
+  company_country: "Uganda",
   district_id: null,
   constituency_id: null,
   subcounty_id: null,
@@ -147,10 +146,12 @@ const AppBar = styled(MuiAppBar, {
 }));
 
 export default function DashboardLayout() {
+  const [currentUser, setCurrentUser] = useState<ApiUser | null>(() => getStoredUser());
+  const currentUserId = currentUser?.id;
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState(() => localStorage.getItem("themeMode") || "light");
   const [themeColors, setThemeColors] = useState<CustomThemeColors>(
-    getStoredCustomThemeColors,
+    () => getStoredCustomThemeColors(currentUserId, currentUser?.theme_colors),
   );
   const [flagColors, setFlagColors] = useState<UgandaFlagColors>(
     getStoredUgandaFlagColors,
@@ -190,9 +191,33 @@ export default function DashboardLayout() {
   const [addAccountMobileCheckedValue, setAddAccountMobileCheckedValue] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
-  const currentUser = getStoredUser();
-  const currentUserId = currentUser?.id;
   const accountMenuOpen = Boolean(accountMenuAnchorEl);
+
+  useEffect(() => {
+    if (!currentUserId) {
+      return;
+    }
+
+    let cancelled = false;
+    const refreshSessionUser = async () => {
+      try {
+        const response = await api.get<ApiUser>(`/users/${currentUserId}`, {
+          params: { viewer_user_id: currentUserId },
+        });
+        if (!cancelled) {
+          storeUser(response.data);
+          setCurrentUser(response.data);
+        }
+      } catch {
+        // Keep the valid local session when a background refresh is unavailable.
+      }
+    };
+
+    void refreshSessionUser();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId]);
 
   // Save preference
   useEffect(() => {
@@ -201,8 +226,15 @@ export default function DashboardLayout() {
 
   useEffect(() => {
     const handleAccentChange = (event: Event) => {
-      const customEvent = event as CustomEvent<{ colors?: CustomThemeColors }>;
-      setThemeColors(customEvent.detail?.colors || getStoredCustomThemeColors());
+      const customEvent = event as CustomEvent<{ colors?: CustomThemeColors; userId?: number | null }>;
+      const eventUserId = customEvent.detail?.userId;
+      if (eventUserId && eventUserId !== currentUserId) {
+        return;
+      }
+      setThemeColors(
+        customEvent.detail?.colors ||
+          getStoredCustomThemeColors(currentUserId, currentUser?.theme_colors),
+      );
     };
 
     window.addEventListener(CUSTOM_THEME_COLORS_EVENT, handleAccentChange);
@@ -212,7 +244,7 @@ export default function DashboardLayout() {
       window.removeEventListener(CUSTOM_THEME_COLORS_EVENT, handleAccentChange);
       window.removeEventListener("storage", handleAccentChange);
     };
-  }, []);
+  }, [currentUser?.theme_colors, currentUserId]);
 
   useEffect(() => {
     const handleFlagColorChange = (event: Event) => {
@@ -648,18 +680,6 @@ export default function DashboardLayout() {
     }));
   };
 
-  const handleAddAccountCountryChange = (country: string) => {
-    setAddAccountForm((current) => ({
-      ...current,
-      company_country: country,
-      mobile_number: rebasePhoneNumberToCountry(
-        current.mobile_number,
-        current.company_country,
-        country,
-      ),
-    }));
-  };
-
   const handleAddAccountLocationChange = (nextValue: {
     district_id?: number | null;
     constituency_id?: number | null;
@@ -818,13 +838,26 @@ export default function DashboardLayout() {
         shape: {
           borderRadius: 0,
         },
+        typography: {
+          fontFamily: APP_FONT_FAMILY,
+        },
         components: {
           MuiCssBaseline: {
             styleOverrides: {
+              html: {
+                fontFamily: APP_FONT_FAMILY,
+              },
               body: {
+                fontFamily: APP_FONT_FAMILY,
                 backgroundColor:
                   mode === "dark" ? "#000000" : "#FFFFFF",
                 color: mode === "dark" ? "#FFFFFF" : "#111111",
+              },
+              "#root": {
+                fontFamily: APP_FONT_FAMILY,
+              },
+              "button, input, textarea, select": {
+                fontFamily: "inherit",
               },
             },
           },
@@ -975,6 +1008,7 @@ export default function DashboardLayout() {
         },
       });
       storeUser(response.data.user);
+      setCurrentUser(response.data.user);
       setAccountMenuAnchorEl(null);
       navigate(`/dashboard/users/${targetUserId}`, { replace: true });
     } catch {
@@ -1048,6 +1082,7 @@ export default function DashboardLayout() {
         },
       );
       storeUser(response.data.user);
+      setCurrentUser(response.data.user);
       setParentSwitchDrawerOpen(false);
       navigate(`/dashboard/users/${parentSwitchTarget.id}`, { replace: true });
     } catch (caughtError: unknown) {
@@ -1558,8 +1593,6 @@ export default function DashboardLayout() {
                   onChange={handleAddAccountChange}
                   fullWidth
                 >
-                  <MenuItem value="business">Business</MenuItem>
-                  <MenuItem value="ngo">NGO</MenuItem>
                   <MenuItem value="government organization">
                     Government Organization
                   </MenuItem>
@@ -1577,13 +1610,12 @@ export default function DashboardLayout() {
                   fullWidth
                 />
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                  <CountryAutocomplete
-                    value={addAccountForm.company_country}
-                    onChange={handleAddAccountCountryChange}
-                    textFieldProps={{
-                      name: "company_country",
-                      fullWidth: true,
-                    }}
+                  <TextField
+                    label="Country"
+                    name="company_country"
+                    value="Uganda"
+                    disabled
+                    fullWidth
                   />
                 </Stack>
                 <UgandaLocationFields

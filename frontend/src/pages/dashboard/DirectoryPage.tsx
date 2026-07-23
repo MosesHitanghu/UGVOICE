@@ -8,7 +8,9 @@ import {
   Chip,
   CircularProgress,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   IconButton,
   InputAdornment,
@@ -23,11 +25,15 @@ import {
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
+import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 
 import { api } from "../../lib/api";
 import CenteredLoader from "../../components/CenteredLoader";
+import ExperimentalFeedbackFields, {
+  INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+} from "../../components/ExperimentalFeedbackFields";
 import UserAvatar from "../../components/UserAvatar";
 import VerifiedBadge from "../../components/VerifiedBadge";
 import { getStoredUser } from "../../lib/session";
@@ -99,10 +105,6 @@ const getProfileTypeLabel = (userType?: string | null) => {
     return "Personal";
   }
 
-  if (normalized === "ngo") {
-    return "NGO";
-  }
-
   return normalized
     .split(" ")
     .filter(Boolean)
@@ -117,10 +119,7 @@ const canUseRoleActionForUser = (user: DirectoryUser, action: UserRoleAction) =>
   if (action === "label_mp") {
     return accountType === "personal" || accountType === "individual";
   }
-  if (action === "label_parliament" || action === "label_constituency") {
-    return accountType === "government organization";
-  }
-  return false;
+  return accountType === "government organization";
 };
 
 const DirectoryPage = () => {
@@ -139,6 +138,7 @@ const DirectoryPage = () => {
   const [offset, setOffset] = useState(0);
   const [cardMenuAnchorEl, setCardMenuAnchorEl] = useState<HTMLElement | null>(null);
   const [selectedMenuUser, setSelectedMenuUser] = useState<DirectoryUser | null>(null);
+  const [deleteDialogUser, setDeleteDialogUser] = useState<DirectoryUser | null>(null);
   const [actionLoadingUserId, setActionLoadingUserId] = useState<number | null>(null);
   const [success, setSuccess] = useState("");
   const [feedbackTargetUser, setFeedbackTargetUser] = useState<DirectoryUser | null>(null);
@@ -147,6 +147,7 @@ const DirectoryPage = () => {
     title: "",
     category: "",
     description: "",
+    ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
   });
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [feedbackSubmitted, setFeedbackSubmitted] = useState(false);
@@ -154,7 +155,6 @@ const DirectoryPage = () => {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const currentUserRole = normalizeAccessValue(currentUser?.role);
   const currentUserCountry = normalizeAccessValue(currentUser?.company_country);
-  const cardMenuOpen = Boolean(cardMenuAnchorEl);
 
   const userCardHoverSx = {
     p: 2.5,
@@ -175,39 +175,14 @@ const DirectoryPage = () => {
     },
   };
 
-  const canManageUserCard = (user: DirectoryUser) => {
-    if (currentUserRole === "admin") {
-      return true;
-    }
-
-    return (
-      currentUserRole === "parliament" &&
+  const canManageUserCard = (user: DirectoryUser) =>
+    currentUserRole === "admin" ||
+    (currentUserRole === "parliament" &&
       currentUserCountry.length > 0 &&
-      currentUserCountry === normalizeAccessValue(user.company_country)
-    );
-  };
+      currentUserCountry === normalizeAccessValue(user.company_country));
 
   const isRoleSelected = (user: DirectoryUser | null, role: string) =>
     normalizeAccessValue(user?.role) === normalizeAccessValue(role);
-
-  const roleToggleSx = {
-    width: "100%",
-    justifyContent: "flex-start",
-    border: 0,
-    borderRadius: "0 !important",
-    px: 2,
-    py: 0.9,
-    textTransform: "none",
-    fontWeight: 500,
-    "&.Mui-selected": {
-      bgcolor: "transparent",
-      color: "primary.main",
-      fontWeight: 700,
-      "&:hover": {
-        bgcolor: "action.hover",
-      },
-    },
-  };
 
   const openCardMenu = (event: React.MouseEvent<HTMLElement>, user: DirectoryUser) => {
     event.preventDefault();
@@ -234,28 +209,49 @@ const DirectoryPage = () => {
       const response = await api.post<DirectoryUser>(
         `/users/${targetUserId}/moderation-action`,
         { action },
-        {
-          params: {
-            actor_user_id: currentUserId,
-          },
-        },
+        { params: { actor_user_id: currentUserId } },
       );
       setUsers((current) =>
-        current.map((user) => (user.id === targetUserId ? { ...user, ...response.data } : user)),
+        current.map((user) =>
+          user.id === targetUserId ? { ...user, ...response.data } : user,
+        ),
       );
       closeCardMenu();
     } catch (caughtError: unknown) {
-      const message =
-        typeof caughtError === "object" &&
-        caughtError !== null &&
-        "response" in caughtError
-          ? (
-              caughtError as {
-                response?: { data?: { detail?: string } };
-              }
-            ).response?.data?.detail || "Unable to apply that user action."
-          : "Unable to apply that user action.";
-      setError(message);
+      const detail =
+        typeof caughtError === "object" && caughtError !== null && "response" in caughtError
+          ? (caughtError as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setError(detail || "Unable to apply that user action.");
+    } finally {
+      setActionLoadingUserId(null);
+    }
+  };
+
+  const deleteSelectedUser = async () => {
+    if (!currentUserId || !deleteDialogUser || currentUserRole !== "admin") {
+      return;
+    }
+
+    const targetUser = deleteDialogUser;
+
+    setActionLoadingUserId(targetUser.id);
+    try {
+      setError("");
+      setSuccess("");
+      await api.delete(`/users/${targetUser.id}`, {
+        params: { actor_user_id: currentUserId },
+      });
+      setUsers((current) => current.filter((user) => user.id !== targetUser.id));
+      setDeleteDialogUser(null);
+      setSuccess(`${getProfileDisplayName(targetUser)} was deleted.`);
+    } catch (caughtError: unknown) {
+      const detail =
+        typeof caughtError === "object" && caughtError !== null && "response" in caughtError
+          ? (caughtError as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : undefined;
+      setDeleteDialogUser(null);
+      setError(detail || "Unable to delete this user.");
     } finally {
       setActionLoadingUserId(null);
     }
@@ -263,12 +259,16 @@ const DirectoryPage = () => {
 
   const openFeedbackDialog = (user: DirectoryUser) => {
     setFeedbackTargetUser(user);
-    setFeedbackDraft({ title: "", category: "", description: "" });
+    setFeedbackDraft({
+      title: "",
+      category: "",
+      description: "",
+      ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+    });
     setFeedbackSubmitted(false);
     setFeedbackFormError("");
     setSuccess("");
     setFeedbackDialogOpen(true);
-    closeCardMenu();
   };
 
   const getFeedbackTitleError = () => {
@@ -318,7 +318,12 @@ const DirectoryPage = () => {
         category: feedbackDraft.category.trim() || null,
         description: feedbackDraft.description.trim(),
       });
-      setFeedbackDraft({ title: "", category: "", description: "" });
+      setFeedbackDraft({
+        title: "",
+        category: "",
+        description: "",
+        ...INITIAL_EXPERIMENTAL_FEEDBACK_DRAFT,
+      });
       setFeedbackDialogOpen(false);
       setSuccess(`Your feedback for ${getProfileDisplayName(feedbackTargetUser)} has been sent.`);
     } catch {
@@ -470,7 +475,7 @@ const DirectoryPage = () => {
             }}
             sx={userCardHoverSx}
           >
-            <Stack spacing={1.5}>
+            <Stack spacing={1.5} sx={{ height: "100%" }}>
               <Stack direction="row" justifyContent="space-between" spacing={1.5}>
                 <Box
                   sx={{
@@ -506,35 +511,55 @@ const DirectoryPage = () => {
                     <Typography color="text.secondary">@{user.username}</Typography>
                   </Box>
                 </Box>
-                <Tooltip title="User actions">
-                  <IconButton
-                    size="small"
-                    aria-label={`Open actions for ${getProfileDisplayName(user)}`}
-                    onClick={(event) => openCardMenu(event, user)}
-                    sx={{ alignSelf: "flex-start", mt: -0.5, mr: -0.5 }}
-                  >
-                    <MoreVertRoundedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                {canManageUserCard(user) ? (
+                  <Tooltip title="Manage user">
+                    <IconButton
+                      size="small"
+                      aria-label={`Manage ${getProfileDisplayName(user)}`}
+                      onClick={(event) => openCardMenu(event, user)}
+                      sx={{ alignSelf: "flex-start", mt: -0.5, mr: -0.5 }}
+                    >
+                      <MoreVertRoundedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                ) : null}
               </Stack>
 
-              <Typography color="text.secondary">
+              <Typography color="text.secondary" sx={{ flexGrow: 1 }}>
                 {user.description || user.company_name || "No profile summary added yet."}
               </Typography>
 
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                <Chip
-                  label={getProfileTypeLabel(user.type)}
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ width: "100%", mt: "auto" }}
+              >
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Chip
+                    label={getProfileTypeLabel(user.type)}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ fontWeight: 700 }}
+                  />
+                  {user.role && normalizeAccessValue(user.role) !== "standard" ? (
+                    <Chip label={user.role} size="small" color="primary" variant="outlined" />
+                  ) : null}
+                </Stack>
+                <Button
+                  variant="contained"
                   size="small"
-                  sx={{
-                    bgcolor: "primary.main",
-                    color: "primary.contrastText",
-                    fontWeight: 700,
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openFeedbackDialog(user);
                   }}
-                />
-                {user.role && normalizeAccessValue(user.role) !== "standard" ? (
-                  <Chip label={user.role} size="small" color="primary" variant="outlined" />
-                ) : null}
+                  sx={{ ml: "auto", flexShrink: 0, borderRadius: "999px", textTransform: "none" }}
+                >
+                  Give Feedback
+                </Button>
               </Stack>
             </Stack>
           </Paper>
@@ -563,37 +588,44 @@ const DirectoryPage = () => {
       ) : null}
       <Menu
         anchorEl={cardMenuAnchorEl}
-        open={cardMenuOpen}
+        open={Boolean(cardMenuAnchorEl)}
         onClose={closeCardMenu}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
       >
-        <MenuItem
-          disabled={!selectedMenuUser || feedbackSubmitting}
-          onClick={() => selectedMenuUser && openFeedbackDialog(selectedMenuUser)}
-        >
-          Give Feedback
-        </MenuItem>
         {selectedMenuUser && canManageUserCard(selectedMenuUser) ? (
           <MenuItem
-            disabled={actionLoadingUserId === selectedMenuUser?.id}
+            disabled={actionLoadingUserId === selectedMenuUser.id}
             onClick={() => void applyUserAction("verify")}
           >
-            Verify
+            Verify account
           </MenuItem>
         ) : null}
-        {selectedMenuUser && canManageUserCard(selectedMenuUser) ? (
-          <Box sx={{ minWidth: 220 }}>
-            {USER_ROLE_ACTIONS.filter((item) =>
+        {selectedMenuUser && canManageUserCard(selectedMenuUser)
+          ? USER_ROLE_ACTIONS.filter((item) =>
               canUseRoleActionForUser(selectedMenuUser, item.action),
             ).map((item) => (
               <ToggleButton
                 key={item.action}
                 value={item.action}
                 selected={isRoleSelected(selectedMenuUser, item.role)}
-                disabled={actionLoadingUserId === selectedMenuUser?.id}
+                disabled={actionLoadingUserId === selectedMenuUser.id}
                 onClick={() => void applyUserAction(item.action)}
-                sx={roleToggleSx}
+                sx={{
+                  width: "100%",
+                  justifyContent: "flex-start",
+                  border: 0,
+                  borderRadius: "0 !important",
+                  px: 2,
+                  py: 0.9,
+                  textTransform: "none",
+                  fontWeight: 500,
+                  "&.Mui-selected": {
+                    bgcolor: "transparent",
+                    color: "primary.main",
+                    fontWeight: 700,
+                  },
+                }}
               >
                 {isRoleSelected(selectedMenuUser, item.role) ? (
                   <CheckRoundedIcon fontSize="small" sx={{ mr: 1 }} />
@@ -602,10 +634,62 @@ const DirectoryPage = () => {
                 )}
                 {item.label}
               </ToggleButton>
-            ))}
-          </Box>
+            ))
+          : null}
+        {selectedMenuUser && currentUserRole === "admin" ? (
+          <MenuItem
+            disabled={actionLoadingUserId === selectedMenuUser.id}
+            onClick={() => {
+              setDeleteDialogUser(selectedMenuUser);
+              closeCardMenu();
+            }}
+            sx={{ color: "error.main" }}
+          >
+            <DeleteOutlineRoundedIcon fontSize="small" sx={{ mr: 1 }} />
+            Delete user
+          </MenuItem>
         ) : null}
       </Menu>
+      <Dialog
+        open={Boolean(deleteDialogUser)}
+        onClose={() => {
+          if (actionLoadingUserId === null) {
+            setDeleteDialogUser(null);
+          }
+        }}
+        aria-labelledby="delete-directory-user-title"
+        aria-describedby="delete-directory-user-description"
+      >
+        <DialogTitle id="delete-directory-user-title">Delete user?</DialogTitle>
+        <DialogContent>
+          <DialogContentText id="delete-directory-user-description">
+            {deleteDialogUser
+              ? `Delete ${getProfileDisplayName(deleteDialogUser)}? This permanently removes the account and its related posts, feedback, and activity.`
+              : "This permanently removes the account and its related data."}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setDeleteDialogUser(null)}
+            disabled={actionLoadingUserId !== null}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void deleteSelectedUser()}
+            color="error"
+            variant="contained"
+            disabled={actionLoadingUserId !== null}
+            autoFocus
+          >
+            {actionLoadingUserId !== null ? (
+              <CircularProgress size={20} color="inherit" />
+            ) : (
+              "Delete user"
+            )}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog
         open={feedbackDialogOpen}
         onClose={() => {
@@ -613,7 +697,7 @@ const DirectoryPage = () => {
             setFeedbackDialogOpen(false);
           }
         }}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
         <DialogTitle>
@@ -622,50 +706,67 @@ const DirectoryPage = () => {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {feedbackFormError ? <Alert severity="error">{feedbackFormError}</Alert> : null}
-            <TextField
-              label="Feedback title"
-              value={feedbackDraft.title}
-              onChange={(event) =>
+            <ExperimentalFeedbackFields
+              value={feedbackDraft}
+              onChange={(value) =>
                 setFeedbackDraft((current) => ({
                   ...current,
-                  title: event.target.value,
+                  ...value,
                 }))
               }
-              size="small"
-              error={Boolean(feedbackSubmitted && getFeedbackTitleError())}
-              helperText={feedbackSubmitted ? getFeedbackTitleError() : ""}
-              fullWidth
             />
-            <Autocomplete
-              freeSolo
-              options={FEEDBACK_CATEGORIES}
-              value={feedbackDraft.category || null}
-              inputValue={feedbackDraft.category}
-              onChange={(_, value) =>
-                setFeedbackDraft((current) => ({
-                  ...current,
-                  category: value || "",
-                }))
-              }
-              onInputChange={(_, value) =>
-                setFeedbackDraft((current) => ({
-                  ...current,
-                  category: value,
-                }))
-              }
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Category"
-                  size="small"
-                  error={Boolean(feedbackSubmitted && getFeedbackCategoryError())}
-                  helperText={feedbackSubmitted ? getFeedbackCategoryError() : ""}
-                  fullWidth
-                />
-              )}
-            />
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", md: "minmax(0, 1.2fr) minmax(0, 1fr)" },
+                gap: 1.5,
+              }}
+            >
+              <TextField
+                label="Feedback title"
+                value={feedbackDraft.title}
+                onChange={(event) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+                size="small"
+                error={Boolean(feedbackSubmitted && getFeedbackTitleError())}
+                helperText={feedbackSubmitted ? getFeedbackTitleError() : ""}
+                fullWidth
+              />
+              <Autocomplete
+                freeSolo
+                options={FEEDBACK_CATEGORIES}
+                value={feedbackDraft.category || null}
+                inputValue={feedbackDraft.category}
+                onChange={(_, value) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    category: value || "",
+                  }))
+                }
+                onInputChange={(_, value) =>
+                  setFeedbackDraft((current) => ({
+                    ...current,
+                    category: value,
+                  }))
+                }
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Category"
+                    size="small"
+                    error={Boolean(feedbackSubmitted && getFeedbackCategoryError())}
+                    helperText={feedbackSubmitted ? getFeedbackCategoryError() : ""}
+                    fullWidth
+                  />
+                )}
+              />
+            </Box>
             <TextField
-              label="Your feedback"
+              label="Section B: Your Feedback"
               value={feedbackDraft.description}
               onChange={(event) =>
                 setFeedbackDraft((current) => ({
@@ -674,7 +775,8 @@ const DirectoryPage = () => {
                 }))
               }
               multiline
-              minRows={4}
+              minRows={5}
+              placeholder="Please share your feedback, concern, or suggestion about a public service or government policy in your area. MPs may record feedback received from constituents."
               error={Boolean(feedbackSubmitted && getFeedbackDescriptionError())}
               helperText={feedbackSubmitted ? getFeedbackDescriptionError() : ""}
               fullWidth

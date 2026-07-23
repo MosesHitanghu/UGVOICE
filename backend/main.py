@@ -10,20 +10,36 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session
 #from sentiment_analysis_model import predict_sentiment_class
 #from sentiment_analysis_model import predict_sentiment as get_sentiment
 import db_models
-from nlp_pipeline import process_feedback, get_sentiment
+from security import hash_password, verify_password
+from nlp_pipeline import (
+    bertopic_enabled,
+    get_sentiment,
+    inference_provider,
+    process_feedback,
+)
+import hf_inference_service as hf_inference
 from database import (
+    drop_obsolete_messaging_tables,
     get_db,
     initialize_database,
+    ensure_users_theme_colors_column,
     SessionLocal,
 )
 from dotenv import load_dotenv
 import os
 from bertopic_service import train_bertopic
+from storage import (
+    LOCAL_UPLOADS_DIR,
+    create_presigned_upload,
+    ensure_local_upload_directories,
+    save_upload,
+    using_local_storage,
+)
 load_dotenv()
 HF_TOKEN = os.getenv("HF_UGVOICE_TOKEN") or os.getenv("HF_TOKEN")
 
@@ -42,26 +58,48 @@ POST_VISIBILITIES = {
     POST_VISIBILITY_CONSTITUENCY,
 }
 BACKEND_DIR = Path(__file__).resolve().parent
-UPLOADS_DIR = BACKEND_DIR / "uploads"
-POST_THUMBNAILS_DIR = UPLOADS_DIR / "post-thumbnails"
-POST_ATTACHMENTS_DIR = UPLOADS_DIR / "post-attachments"
+UPLOADS_DIR = LOCAL_UPLOADS_DIR
 ALLOWED_POST_ATTACHMENT_EXTENSIONS = {".pdf"}
 ALLOWED_POST_THUMBNAIL_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 PERSONAL_ACCOUNT_TYPE = "personal"
 LEGACY_PERSONAL_ACCOUNT_TYPES = {"individual", "personal"}
-ORGANIZATION_ACCOUNT_TYPES = {"business", "ngo", "government organization"}
+ORGANIZATION_ACCOUNT_TYPES = {"government organization"}
+SUPPORTED_ACCOUNT_TYPES = {PERSONAL_ACCOUNT_TYPE, *ORGANIZATION_ACCOUNT_TYPES}
 POST_CREATOR_ROLES = {"admin", "mp", "parliament", "constituency"}
 DB_SETUP_TOKEN_ENV_KEYS = ("UGVOICE_DB_SETUP_TOKEN", "DB_SETUP_TOKEN")
 POST_VIEW_DEDUP_WINDOW = timedelta(hours=24)
 REVIEW_EDIT_WINDOW = timedelta(hours=1)
 
-POST_THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-POST_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def require_ml_enabled() -> None:
+    if not bertopic_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Advanced ML analysis is disabled for this API deployment",
+        )
 
 
 def normalize_account_type(value: Optional[str]):
     account_type = (value or PERSONAL_ACCOUNT_TYPE).strip().lower()
-    return PERSONAL_ACCOUNT_TYPE if account_type in LEGACY_PERSONAL_ACCOUNT_TYPES else account_type
+    normalized_type = (
+        PERSONAL_ACCOUNT_TYPE
+        if account_type in LEGACY_PERSONAL_ACCOUNT_TYPES
+        else account_type
+    )
+    if normalized_type not in SUPPORTED_ACCOUNT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Account type must be personal or government organization",
+        )
+    return normalized_type
 
 
 def get_db_setup_token():
@@ -72,15 +110,33 @@ def get_db_setup_token():
     return None
 
 
+configured_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=configured_origins,
+    allow_credentials="*" not in configured_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+if using_local_storage():
+    ensure_local_upload_directories()
+    app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
+
+@app.on_event("startup")
+def ensure_runtime_schema():
+    default_schema_sync = not bool(os.getenv("DATABASE_URL") or os.getenv("VERCEL"))
+    if env_flag("UGVOICE_RUN_STARTUP_SCHEMA_SYNC", default_schema_sync):
+        drop_obsolete_messaging_tables()
+        ensure_users_theme_colors_column()
 
 
 def now_parts():
@@ -150,7 +206,13 @@ def require_review_manage_window(review):
         )
 
 
-async def save_uploaded_post_file(upload, target_dir: Path, *, allowed_extensions: set[str]):
+async def save_uploaded_post_file(
+    upload,
+    folder: str,
+    *,
+    allowed_extensions: set[str],
+    max_bytes: int,
+):
     if upload is None or not getattr(upload, "filename", None):
         return None
 
@@ -162,11 +224,24 @@ async def save_uploaded_post_file(upload, target_dir: Path, *, allowed_extension
             detail=f"Unsupported file type. Allowed types: {allowed_values}",
         )
 
-    stored_name = f"{uuid4().hex}{extension}"
-    destination = target_dir / stored_name
     file_bytes = await upload.read()
-    destination.write_bytes(file_bytes)
-    return f"/uploads/{target_dir.name}/{stored_name}"
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded file exceeds the {max_bytes // (1024 * 1024)} MB limit",
+        )
+    try:
+        return save_upload(
+            file_bytes,
+            extension=extension,
+            folder=folder,
+            content_type=getattr(upload, "content_type", None),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Upload storage is unavailable or not configured",
+        ) from exc
 
 
 async def parse_post_create_payload(request: Request):
@@ -180,13 +255,15 @@ async def parse_post_create_payload(request: Request):
 
         thumbnail_path = await save_uploaded_post_file(
             form.get("thumbnail"),
-            POST_THUMBNAILS_DIR,
+            "post-thumbnails",
             allowed_extensions=ALLOWED_POST_THUMBNAIL_EXTENSIONS,
+            max_bytes=int(os.getenv("MAX_THUMBNAIL_BYTES", str(5 * 1024 * 1024))),
         )
         attachment_path = await save_uploaded_post_file(
             form.get("attachment"),
-            POST_ATTACHMENTS_DIR,
+            "post-attachments",
             allowed_extensions=ALLOWED_POST_ATTACHMENT_EXTENSIONS,
+            max_bytes=int(os.getenv("MAX_ATTACHMENT_BYTES", str(20 * 1024 * 1024))),
         )
 
         return PostCreate(
@@ -337,11 +414,35 @@ def normalize_user_location_hierarchy(
         if constituency is not None and constituency.district_id != district.id:
             raise HTTPException(status_code=400, detail="Selected constituency does not belong to the selected district")
 
+        region = ensure_region_exists(db, district.region_id)
+        country = ensure_country_exists(db, region.country_id)
+        if country.name.strip().lower() != "uganda":
+            raise HTTPException(
+                status_code=422,
+                detail="User locations must be within Uganda",
+            )
+
+    if any(
+        value is None
+        for value in (
+            resolved_district_id,
+            resolved_constituency_id,
+            resolved_subcounty_id,
+            resolved_parish_id,
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="District, constituency, subcounty/division, and parish are required",
+        )
+
     return {
         "district_id": resolved_district_id,
         "constituency_id": resolved_constituency_id,
         "subcounty_id": resolved_subcounty_id,
         "parish_id": resolved_parish_id,
+        "company_country": "Uganda",
+        "company_city": district.name,
     }
 
 
@@ -392,9 +493,12 @@ def normalize_review_source_hierarchy(
 
 
 def ensure_valid_company_country(db: Session, country_name: Optional[str]):
-    normalized_country_name = (country_name or "").strip()
-    if not normalized_country_name:
-        return None
+    normalized_country_name = (country_name or "Uganda").strip()
+    if normalized_country_name.lower() != "uganda":
+        raise HTTPException(
+            status_code=422,
+            detail="User country must be Uganda",
+        )
 
     country = (
         db.query(db_models.Countries)
@@ -625,6 +729,13 @@ def add_feedback_analysis_fields(payload: dict):
     payload["embedding_model"] = analysis.get("embedding_model")
     payload["summar_model"] = analysis.get("summary_model")
     payload["sentiment_model"] = analysis.get("sentiment_model")
+    payload["inference_provider"] = analysis.get("inference_provider")
+    payload["inference_mode"] = analysis.get("inference_mode")
+    payload["inference_fallback_used"] = analysis.get("inference_fallback_used")
+    payload["inference_fallback_tasks"] = json.dumps(
+        analysis.get("inference_fallback_tasks") or []
+    )
+    payload["inference_latency_ms"] = analysis.get("inference_latency_ms")
     return payload
 
 
@@ -785,6 +896,7 @@ def build_signup_payload(db: Session, user: "SignupRequest"):
         "username": normalize_optional_string(user.username),
         "email": normalize_optional_string(user.email),
         "mobile_number": normalize_optional_string(user.mobile_number),
+        "password": hash_password(user.password),
         "role": "standard",
         "status": "active",
         "type": account_type,
@@ -809,6 +921,9 @@ def build_signup_payload(db: Session, user: "SignupRequest"):
 
         payload["fname"] = normalize_optional_string(user.fname)
         payload["lname"] = normalize_optional_string(user.lname)
+        payload["company_name"] = None
+        payload["type_of_business"] = None
+        payload["number_of_employees"] = None
         payload["parent_user_id"] = None
         return payload
 
@@ -818,6 +933,7 @@ def build_signup_payload(db: Session, user: "SignupRequest"):
     payload["company_name"] = normalize_optional_string(user.company_name)
     payload["fname"] = None
     payload["lname"] = None
+    payload["gender"] = None
     payload["parent_user_id"] = resolve_parent_user_id(
         db,
         parent_user_id=user.parent_user_id,
@@ -2505,6 +2621,7 @@ class UserCreate(BaseModel):
     type_of_business: Optional[str] = None
     profile_picture: Optional[str] = None
     description: Optional[str] = None
+    theme_colors: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -2533,6 +2650,7 @@ class UserUpdate(BaseModel):
     type_of_business: Optional[str] = None
     profile_picture: Optional[str] = None
     description: Optional[str] = None
+    theme_colors: Optional[str] = None
 
 
 class UserModerationAction(BaseModel):
@@ -2637,6 +2755,11 @@ class FeedbackCreate(BaseModel):
     embedding_model: Optional[str] = None
     summar_model: Optional[str] = None
     sentiment_model: Optional[str] = None
+    inference_provider: Optional[str] = None
+    inference_mode: Optional[str] = None
+    inference_fallback_used: Optional[bool] = None
+    inference_fallback_tasks: Optional[str] = None
+    inference_latency_ms: Optional[int] = None
     target_user_id: int
 
 
@@ -2660,8 +2783,21 @@ class FeedbackUpdate(BaseModel):
     embedding_model: Optional[str] = None
     summar_model: Optional[str] = None
     sentiment_model: Optional[str] = None
+    inference_provider: Optional[str] = None
+    inference_mode: Optional[str] = None
+    inference_fallback_used: Optional[bool] = None
+    inference_fallback_tasks: Optional[str] = None
+    inference_latency_ms: Optional[int] = None
     target_user_id: Optional[int] = None
     status: Optional[str] = None
+
+
+class UploadPresignRequest(BaseModel):
+    actor_user_id: int
+    filename: str
+    content_type: str
+    file_size: int = Field(gt=0)
+    folder: str
 
 
 class PostCreate(BaseModel):
@@ -2821,6 +2957,40 @@ def greeting():
     return {"message": "UGVOICE API"}
 
 
+@app.get("/health", include_in_schema=False)
+def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def readiness_check(db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1"))
+    return {"status": "ready", "database": "connected"}
+
+
+@app.get("/ml/status", include_in_schema=False)
+def ml_status():
+    provider = inference_provider()
+    return {
+        "provider": provider,
+        "configured": (
+            hf_inference.is_configured()
+            if provider == "huggingface"
+            else provider == "local"
+        ),
+        "models": {
+            "sentiment": hf_inference.SENTIMENT_MODEL,
+            "summary": hf_inference.SUMMARY_MODEL,
+            "embedding": hf_inference.EMBEDDING_MODEL,
+        },
+        "remote_embeddings_enabled": os.getenv(
+            "HF_ENABLE_EMBEDDINGS", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"},
+        "bertopic_enabled": bertopic_enabled(),
+        "local_models_downloaded_by_api": False if provider == "huggingface" else None,
+    }
+
+
 @app.post("/signup", status_code=status.HTTP_201_CREATED)
 def signup(user: SignupRequest, db: Session = Depends(get_db)):
     ensure_user_identity_available(
@@ -2847,7 +3017,7 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
         .first()
     )
 
-    if user is None or user.password != credentials.password:
+    if user is None or not verify_password(credentials.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email/mobile number or password",
@@ -2902,6 +3072,7 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
         mobile_number=normalized_mobile_number,
     )
     payload = schema_dump(user)
+    payload["password"] = hash_password(user.password)
     payload["email"] = normalized_email
     payload["username"] = normalized_username
     payload["mobile_number"] = normalized_mobile_number
@@ -3032,7 +3203,9 @@ def switch_account_with_parent_login(
         or target_user.mobile_number == identifier
     )
 
-    if not matches_identifier or target_user.password != credentials.password:
+    if not matches_identifier or not verify_password(
+        credentials.password, target_user.password
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid parent account credentials",
@@ -3172,6 +3345,8 @@ def apply_user_moderation_action(
 @app.put("/users/{user_id}")
 def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
     payload = schema_dump(user, exclude_unset=True)
+    if payload.get("password"):
+        payload["password"] = hash_password(payload["password"])
     if "email" in payload:
         payload["email"] = normalize_optional_string(payload.get("email"))
     if "username" in payload:
@@ -3188,6 +3363,8 @@ def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
         payload["company_city"] = normalize_optional_string(payload.get("company_city"))
     if "type_of_business" in payload:
         payload["type_of_business"] = normalize_optional_string(payload.get("type_of_business"))
+    if "theme_colors" in payload:
+        payload["theme_colors"] = normalize_optional_string(payload.get("theme_colors"))
     if "type" in payload:
         payload["type"] = normalize_account_type(payload.get("type"))
     ensure_user_identity_available(
@@ -3204,7 +3381,14 @@ def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
         )
     if "company_country" in payload:
         payload["company_country"] = ensure_valid_company_country(db, payload.get("company_country"))
-    location_keys = {"district_id", "constituency_id", "subcounty_id", "parish_id"}
+    location_keys = {
+        "district_id",
+        "constituency_id",
+        "subcounty_id",
+        "parish_id",
+        "company_country",
+        "company_city",
+    }
     if payload.keys() & location_keys:
         current_user = get_or_404(db, db_models.User, user_id)
         payload.update(
@@ -3221,8 +3405,74 @@ def update_user(user_id: int, user: UserUpdate, db: Session = Depends(get_db)):
 
 
 @app.delete("/users/{user_id}")
-def delete_user(user_id: int, db: Session = Depends(get_db)):
-    return delete_record(db, db_models.User, user_id, "User deleted successfully")
+def delete_user(
+    user_id: int,
+    actor_user_id: int = Query(...),
+    db: Session = Depends(get_db),
+):
+    target_user = get_or_404(db, db_models.User, user_id)
+    actor = require_admin_user(db, actor_user_id)
+    if actor.id == target_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Administrators cannot delete their own signed-in account",
+        )
+
+    authored_post_ids = [
+        post_id
+        for (post_id,) in db.query(db_models.Post.id)
+        .filter(db_models.Post.author_user_id == target_user.id)
+        .all()
+    ]
+    if authored_post_ids:
+        db.query(db_models.PostActionView).filter(
+            db_models.PostActionView.post_id.in_(authored_post_ids)
+        ).delete(synchronize_session=False)
+        db.query(db_models.PostView).filter(
+            db_models.PostView.post_id.in_(authored_post_ids)
+        ).delete(synchronize_session=False)
+        db.query(db_models.PostReaction).filter(
+            db_models.PostReaction.post_id.in_(authored_post_ids)
+        ).delete(synchronize_session=False)
+        db.query(db_models.PostReview).filter(
+            db_models.PostReview.post_id.in_(authored_post_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(db_models.PostReaction).filter(
+        db_models.PostReaction.user_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.PostReview).filter(
+        db_models.PostReview.author_user_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.Review).filter(
+        db_models.Review.author_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.Feedback).filter(
+        or_(
+            db_models.Feedback.author_user_id == target_user.id,
+            db_models.Feedback.target_user_id == target_user.id,
+        )
+    ).delete(synchronize_session=False)
+    db.query(db_models.EmergingIssue).filter(
+        db_models.EmergingIssue.user_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.IssueTrend).filter(
+        db_models.IssueTrend.target_user_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.Subscription).filter(
+        db_models.Subscription.user_id == target_user.id
+    ).delete(synchronize_session=False)
+    db.query(db_models.User).filter(
+        db_models.User.parent_user_id == target_user.id
+    ).update({db_models.User.parent_user_id: None}, synchronize_session=False)
+    if authored_post_ids:
+        db.query(db_models.Post).filter(
+            db_models.Post.id.in_(authored_post_ids)
+        ).delete(synchronize_session=False)
+
+    db.delete(target_user)
+    db.commit()
+    return {"message": "User deleted successfully"}
 
 
 @app.post("/countries", status_code=status.HTTP_201_CREATED)
@@ -3806,6 +4056,11 @@ def update_feedback(feedback_id: int, feedback: FeedbackUpdate, db: Session = De
                     "embedding_model",
                     "summar_model",
                     "sentiment_model",
+                    "inference_provider",
+                    "inference_mode",
+                    "inference_fallback_used",
+                    "inference_fallback_tasks",
+                    "inference_latency_ms",
                 )
                 if key in analysis_payload
             }
@@ -3848,6 +4103,45 @@ def create_post_category(
     db.commit()
     db.refresh(record)
     return model_to_dict(record)
+
+
+@app.post("/storage/presign")
+def presign_upload(payload: UploadPresignRequest, db: Session = Depends(get_db)):
+    author = ensure_user_exists(db, payload.actor_user_id)
+    ensure_author_can_create_post(author)
+
+    upload_rules = {
+        "post-thumbnails": (
+            ALLOWED_POST_THUMBNAIL_EXTENSIONS,
+            int(os.getenv("MAX_THUMBNAIL_BYTES", str(5 * 1024 * 1024))),
+        ),
+        "post-attachments": (
+            ALLOWED_POST_ATTACHMENT_EXTENSIONS,
+            int(os.getenv("MAX_ATTACHMENT_BYTES", str(20 * 1024 * 1024))),
+        ),
+    }
+    if payload.folder not in upload_rules:
+        raise HTTPException(status_code=422, detail="Unsupported upload folder")
+    allowed_extensions, max_bytes = upload_rules[payload.folder]
+    extension = normalize_upload_extension(payload.filename)
+    if extension not in allowed_extensions:
+        raise HTTPException(status_code=422, detail="Unsupported file type")
+    if payload.file_size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded file exceeds the {max_bytes // (1024 * 1024)} MB limit",
+        )
+    try:
+        return create_presigned_upload(
+            extension=extension,
+            folder=payload.folder,
+            content_type=payload.content_type or "application/octet-stream",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Direct upload storage is unavailable or not configured",
+        ) from exc
 
 
 @app.post("/posts", status_code=status.HTTP_201_CREATED)
@@ -4480,6 +4774,7 @@ def run_bertopic(
     db: Session = Depends(get_db),
 ):
     require_admin_user(db, actor_user_id)
+    require_ml_enabled()
     feedbacks = list_feedbacks_for_topic_modeling(db)
     if len(feedbacks) < 10:
         raise HTTPException(
@@ -4507,10 +4802,13 @@ def initialize_db_with_seed_data(
 ):
     from seed_dummy_data import (
         DEMO_SEED_TAG,
+        ensure_primary_admin,
+        get_uganda_location_paths,
         label_existing_seed_data,
         seed_emerging_issues,
         seed_feedbacks,
         seed_posts_reviews_and_reactions,
+        seed_skylab_analytics_data,
         seed_subscriptions,
         seed_topics_and_reviews,
         seed_users,
@@ -4527,8 +4825,10 @@ def initialize_db_with_seed_data(
         )
         label_existing_seed_data(db)
         users = seed_users(db)
+        ensure_primary_admin(db, get_uganda_location_paths(db))
         seed_topics_and_reviews(db, users)
         seed_feedbacks(db, users)
+        seed_skylab_analytics_data(db, users)
         update_legacy_bulk_posts(db)
         seed_posts_reviews_and_reactions(db, users)
         seed_subscriptions(db, users)
@@ -4644,6 +4944,7 @@ def run_user_bertopic(
     db: Session = Depends(get_db),
 ):
     require_feedback_owner(actor_user_id, user_id)
+    require_ml_enabled()
     start_date = timeframe_to_start_date(timeframe)
     feedbacks = list_feedbacks_for_topic_modeling(
         db,
@@ -4679,6 +4980,7 @@ def run_country_bertopic(
     db: Session = Depends(get_db),
 ):
     actor = ensure_user_exists(db, actor_user_id)
+    require_ml_enabled()
     location_maps = get_location_reference_maps(db)
     country_id = resolve_user_country_id(db, actor, location_maps)
     if country_id is None:

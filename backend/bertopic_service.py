@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-from sklearn.feature_extraction.text import CountVectorizer
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -15,6 +13,8 @@ NOISE_TOPIC_LABEL = "Other / Noise"
 
 
 def build_vectorizer():
+    from sklearn.feature_extraction.text import CountVectorizer
+
     return CountVectorizer(
         stop_words="english",
         ngram_range=(1, 3),
@@ -49,18 +49,30 @@ def topic_probability_for_row(probabilities: Any, row_index: int):
         row = probabilities[row_index]
         if row is None:
             return None
+        import numpy as np
+
         return float(np.max(row))
     except (IndexError, TypeError, ValueError):
         return None
 
 
 def train_bertopic(feedbacks: list[dict], *, model_version: str | None = None):
+    configured_provider = os.getenv("UGVOICE_ML_PROVIDER", "").strip().lower()
+    legacy_enabled = os.getenv("UGVOICE_ML_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+    if configured_provider != "local" and not legacy_enabled:
+        raise RuntimeError(
+            "BERTopic is disabled. Deploy the optional ML worker and set UGVOICE_ML_ENABLED=true."
+        )
     if len(feedbacks) < MIN_FEEDBACK_RECORDS:
         raise ValueError(
             f"BERTopic needs at least {MIN_FEEDBACK_RECORDS} feedback records."
         )
 
     docs = [str(item["clean_text"]).strip() for item in feedbacks]
+    import numpy as np
+
     embeddings = np.asarray([item["embedding"] for item in feedbacks], dtype=np.float32)
     if embeddings.ndim != 2:
         raise ValueError("Feedback embeddings must be a two-dimensional array.")

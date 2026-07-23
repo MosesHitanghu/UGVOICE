@@ -12,6 +12,7 @@ It should be updated whenever we add or change a project convention.
 ## Core Product Scope
 
 - The active product scope is centered on `users`, `posts`, `feedbacks`, `reviews`, `subscriptions`, and `emerging issues`.
+- Private messaging and chat are not part of the product scope. Do not add messaging UI, API routes, models, or database tables.
 - Organization features and organization-based visibility logic should not be extended further.
 - New private-access work should prefer shared-link post access instead of group membership rules.
 
@@ -49,11 +50,15 @@ It should be updated whenever we add or change a project convention.
 - Personal accounts keep `parent_user_id = null`.
 - Independent organization signups may keep `parent_user_id = null`.
 - Organization child accounts created by a logged-in parent must store the owning personal account in `parent_user_id`.
-- `type` should support at least:
-  - `individual`
-  - `business`
-  - `ngo`
-  - `government organization`
+- `type` supports `personal` and `government organization` only.
+- Legacy `individual` values normalize to `personal`.
+- `business` and `ngo` account types are not supported and must not be seeded or accepted by the API.
+- All users are Uganda-based and must have a complete, valid Uganda district, constituency, subcounty/division, and parish hierarchy.
+- User `company_country` is normalized to `Uganda`, and `company_city` follows the selected Uganda district.
+- Seeded and normalized personal usernames are derived from first and last names.
+- Seeded and normalized government-organization usernames are derived from the organization title.
+- Usernames must not use placeholder labels such as `demo`, `dummy`, `sample`, or generic numbered `user` values.
+- Repeated name- or title-based usernames receive a numeric suffix and remain unique case-insensitively.
 - Never return the stored `password` field in API responses.
 
 ## Visibility Rules
@@ -68,6 +73,10 @@ It should be updated whenever we add or change a project convention.
 
 - Frontend-facing feedback naming should use `submitted` and `received`.
 - Do not introduce new frontend naming like `authored` for the same concept.
+- Vercel production inference uses named Hugging Face models through remote APIs and must not download model weights.
+- Feedback analysis must persist the inference provider, mode, exact model IDs, latency, and whether any fallback was used.
+- A fallback result must be labelled as a fallback and must never be presented as model-generated output.
+- BERTopic may only be labelled as active when the optional local or worker pipeline actually executes BERTopic.
 
 ### Reviews
 

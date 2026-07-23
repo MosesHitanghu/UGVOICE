@@ -1,0 +1,91 @@
+name: ugvoice
+region: fra
+features:
+  - buildpack-stack=ubuntu-22
+
+databases:
+  - name: ugvoice-db
+    engine: PG
+    version: "17"
+    production: true
+
+services:
+  - name: api
+    github:
+      repo: MosesHitanghu/UGVOICE
+      branch: main
+      deploy_on_push: true
+    source_dir: backend
+    environment_slug: python
+    run_command: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 20
+      period_seconds: 15
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    routes:
+      - path: /api
+    envs:
+      - key: DATABASE_URL
+        value: ${ugvoice-db.DATABASE_URL}
+        scope: RUN_TIME
+      - key: UGVOICE_CREATE_DATABASE
+        value: "false"
+        scope: RUN_TIME
+      - key: UGVOICE_RUN_STARTUP_SCHEMA_SYNC
+        value: "false"
+        scope: RUN_TIME
+      - key: UGVOICE_ML_ENABLED
+        value: "false"
+        scope: RUN_TIME
+      - key: UGVOICE_STORAGE_BACKEND
+        value: spaces
+        scope: RUN_TIME
+      - key: CORS_ALLOWED_ORIGINS
+        value: "*"
+        scope: RUN_TIME
+
+static_sites:
+  - name: web
+    github:
+      repo: MosesHitanghu/UGVOICE
+      branch: main
+      deploy_on_push: true
+    source_dir: frontend
+    environment_slug: node-js
+    build_command: npm ci && npm run build
+    output_dir: dist
+    catchall_document: index.html
+    routes:
+      - path: /
+    envs:
+      - key: VITE_API_BASE_URL
+        value: /api
+        scope: BUILD_TIME
+
+jobs:
+  - name: database-setup
+    kind: PRE_DEPLOY
+    github:
+      repo: MosesHitanghu/UGVOICE
+      branch: main
+      deploy_on_push: true
+    source_dir: backend
+    environment_slug: python
+    run_command: python deploy_setup.py
+    instance_size_slug: apps-s-1vcpu-1gb
+    envs:
+      - key: DATABASE_URL
+        value: ${ugvoice-db.DATABASE_URL}
+        scope: RUN_TIME
+      - key: UGVOICE_CREATE_DATABASE
+        value: "false"
+        scope: RUN_TIME
+      - key: UGVOICE_SEED_REFERENCE_DATA
+        value: "true"
+        scope: RUN_TIME

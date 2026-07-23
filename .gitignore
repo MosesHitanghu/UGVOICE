@@ -6,6 +6,7 @@ venv/
 myvenv/
 .virtualenv-app-data/
 .codex-temp/
+.git-combined-backup/
 
 # Environment and local secrets
 .env

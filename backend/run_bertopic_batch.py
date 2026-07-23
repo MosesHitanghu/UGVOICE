@@ -18,7 +18,7 @@ def main():
         result = train_bertopic(feedbacks)
         issue_id_by_topic = save_bertopic_results(db, result)
         print(
-            "BERTopic completed: "
+            "BERTopic completed:"
             f"{len(feedbacks)} feedbacks, "
             f"{len(issue_id_by_topic)} issues, "
             f"model_version={result['model_version']}, "
