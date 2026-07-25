@@ -564,6 +564,67 @@ def ensure_users_personal_account_type():
         )
 
 
+def ensure_parliament_profile_name():
+    """Rename the legacy Skylab seed identity and its public demo content."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE users
+                SET username = CASE
+                        WHEN lower(username) = 'skylab.parliamentary.feedback.desk'
+                        THEN 'parliament'
+                        ELSE username
+                    END,
+                    email = CASE
+                        WHEN lower(email) = 'skylab@ugvoice.test'
+                        THEN 'parliament@ugvoice.test'
+                        ELSE email
+                    END,
+                    fname = 'Parliament',
+                    lname = '',
+                    company_name = 'Parliament',
+                    description = replace(description, 'Skylab', 'Parliament')
+                WHERE lower(username) IN (
+                        'parliament',
+                        'skylab.parliamentary.feedback.desk'
+                    )
+                   OR lower(email) IN (
+                        'parliament@ugvoice.test',
+                        'skylab@ugvoice.test'
+                    )
+                   OR (
+                        lower(fname) = 'skylab'
+                        AND lower(lname) = 'parliament'
+                    )
+                """
+            )
+        )
+
+        for table_name, columns in (
+            ("feedbacks", ("title", "description", "summary")),
+            ("posts", ("title", "content")),
+            ("post_reviews", ("content",)),
+            ('"emergingIssues"', ("title", "description")),
+        ):
+            for column_name in columns:
+                connection.execute(
+                    text(
+                        f"""
+                        UPDATE {table_name}
+                        SET {column_name} = replace(
+                            {column_name},
+                            'Skylab',
+                            'Parliament'
+                        )
+                        WHERE seed_tag = :seed_tag
+                          AND {column_name} LIKE '%Skylab%'
+                        """
+                    ),
+                    {"seed_tag": "ugvoice_demo_seed"},
+                )
+
+
 def ensure_seed_tag_columns():
     # Demo rows use this marker so they can be removed before production.
     seed_tag_tables = [
@@ -1512,6 +1573,7 @@ def initialize_database(*, include_reference_data: bool = True):
     ensure_review_source_columns()
     ensure_location_indexes()
     ensure_seed_tag_columns()
+    ensure_parliament_profile_name()
 
     if include_reference_data:
         seed_countries()

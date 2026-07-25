@@ -56,19 +56,19 @@ SENTIMENTS = ["positive", "neutral", "negative"]
 ISSUE_PRIORITIES = ["low", "medium", "high"]
 ISSUE_STATUSES = ["open", "monitoring", "resolved"]
 SKYLAB_PROFILE = {
-    "username": "skylab.parliamentary.feedback.desk",
-    "email": "skylab@ugvoice.test",
-    "fname": "Skylab",
-    "lname": "Parliament",
+    "username": "parliament",
+    "email": "parliament@ugvoice.test",
+    "fname": "Parliament",
+    "lname": "",
     "mobile_number": "0700001999",
     "type": "government organization",
-    "company_name": "Skylab Parliamentary Feedback Desk",
+    "company_name": "Parliament",
     "company_country": "Uganda",
     "company_city": "Kampala",
     "type_of_business": "Parliamentary Feedback",
     "role": "Parliament",
     "description": (
-        "Skylab coordinates parliamentary feedback intake, constituency "
+        "Parliament coordinates parliamentary feedback intake, constituency "
         "submissions, and issue monitoring for public-service analytics."
     ),
 }
@@ -233,15 +233,15 @@ SKYLAB_FEEDBACK_THEMES = [
 ]
 SKYLAB_POSTS = [
     {
-        "title": "Skylab opens public submissions on health service delivery",
+        "title": "Parliament opens public submissions on health service delivery",
         "content": (
-            "Skylab is collecting citizen and MP-recorded feedback on medicine stock-outs, facility staffing, "
+            "Parliament is collecting citizen and MP-recorded feedback on medicine stock-outs, facility staffing, "
             "maternity care, and district health accountability for parliamentary follow-up."
         ),
         "category": "Healthcare",
     },
     {
-        "title": "Skylab consultation on roads, markets, and constituency access",
+        "title": "Parliament consultation on roads, markets, and constituency access",
         "content": (
             "Residents are invited to document priority feeder roads, bridge repairs, transport costs, "
             "and evidence needed for committee oversight of infrastructure funding."
@@ -249,7 +249,7 @@ SKYLAB_POSTS = [
         "category": "Roads and Transport",
     },
     {
-        "title": "Skylab youth employment and skills feedback window",
+        "title": "Parliament youth employment and skills feedback window",
         "content": (
             "Young people, training institutions, and employers can share feedback on apprenticeships, "
             "vocational training, startup finance, and job placement support."
@@ -1000,8 +1000,16 @@ def get_or_create_skylab_user(db):
     skylab = (
         db.query(db_models.User)
         .filter(
-            db_models.User.username.ilike("%skylab%")
-            | db_models.User.email.ilike("%skylab%")
+            db_models.User.username.in_(
+                ("parliament", "skylab.parliamentary.feedback.desk")
+            )
+            | db_models.User.email.in_(
+                ("parliament@ugvoice.test", "skylab@ugvoice.test")
+            )
+            | (
+                db_models.User.fname.ilike("skylab")
+                & db_models.User.lname.ilike("parliament")
+            )
         )
         .order_by(db_models.User.id.asc())
         .first()
@@ -1051,7 +1059,8 @@ def reassign_skylab_seed_rows(db, skylab_id: int):
     )
     db.query(db_models.Post).filter(
         db_models.Post.seed_tag == DEMO_SEED_TAG,
-        db_models.Post.title.ilike("Skylab%"),
+        db_models.Post.title.ilike("Skylab%")
+        | db_models.Post.title.ilike("Parliament%"),
     ).update(
         {db_models.Post.author_user_id: skylab_id},
         synchronize_session=False,
@@ -1123,7 +1132,7 @@ def seed_skylab_analytics_data(db, users):
                     "post_id": post.id,
                     "author_user_id": reviewer.id,
                     "content": (
-                        "This Skylab consultation should capture constituency evidence, "
+                        "This Parliament consultation should capture constituency evidence, "
                         "publish the response timeline, and show how the feedback informs Parliament."
                     ),
                     "date_added": post_date,
@@ -1151,7 +1160,7 @@ def seed_skylab_analytics_data(db, users):
             db,
             with_seed_tag({
                 "user_id": skylab.id,
-                "title": f"Skylab Issue: {issue_payload['title']}",
+                "title": f"Parliament Issue: {issue_payload['title']}",
                 "description": issue_payload["description"],
                 "date_added": issue_date,
                 "time_added": issue_time,
